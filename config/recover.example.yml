@@ -1,0 +1,13 @@
+# Experimental: use the triggering request's resolved provider/model/effort.
+- id: rice-patrol
+  disabled: false
+  config:
+    mode: recover
+    provider: '*'
+    model: '*'
+    stateDirectory: /absolute/path/to/research-guard-state
+    stopTimeoutMs: 10000
+    compactTimeoutMs: 15000
+    resumeTimeoutMs: 60000
+    maxResumeRequests: 4
+    recoveryTools: [read, glob, grep, write, edit]

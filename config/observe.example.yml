@@ -1,0 +1,7 @@
+- id: rice-patrol
+  disabled: false
+  config:
+    mode: observe
+    provider: '*'
+    model: '*'
+    stateDirectory: /absolute/path/to/research-guard-state
