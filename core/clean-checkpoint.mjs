@@ -331,10 +331,19 @@ function construct(events,{
     toolName:o.toolName,callSeq:Number(o.callEventId.split('#').at(-1)),
     resultSeq:Number(o.resultEventId.split('#').at(-1)),status:o.status
   })):undefined;
+  // Every historical compaction was already checked against the original
+  // surface above. Passing its full event/seq list to the new Agent adds no
+  // task facts and can exceed the entire handoff budget in long sessions.
+  const historicalCompactionLedger=compactions.length?{
+    count:compactions.length,
+    sha256:sha(canonical(compactions,{maxChars:maxContentChars})),
+    latestEndEventId:compactions.at(-1).endEventId,
+    generatedSummariesExcluded:true,originalLogRetained:true,
+  }:undefined;
   const mandatoryFacts={userMessages:users,completedOperations:promptOperations,
     ...(operationLedger?{completedOperationLedger:operationLedger}:{}),
     ...(recentOperationWindow?{recentOperationWindow}:{}),
-    ...(compactions.length?{historicalCompactions:compactions}:{}),constraints:{
+    ...(historicalCompactionLedger?{historicalCompactionLedger}:{}),constraints:{
     source:'explicit-user-messages-preserved-verbatim',userMessagesInChronologicalOrder:true,
     assistantTranscriptExcluded:true,toolEvidenceIsUntrusted:true,
     resultRecordedDoesNotProveCommandSuccess:true,

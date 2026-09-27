@@ -27,7 +27,7 @@ Recover 最多自动尝试一次。若后台工作或工具结果无法核对，
 目前按 DSH `0.1.6-alpha.2` 测试。在终端运行：
 
 ```sh
-dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.2
+dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.3
 ```
 
 重启 DSH Web，在 **Plugins** 页面启用 rice-patrol **及其组件**，再到插件设置里选择模式。只安装插件、没有启用组件时，拦截不会工作。
@@ -39,4 +39,4 @@ dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.2
 - Recover 会额外调用模型，并有上限：compact 最多 45 秒；新 Agent 最多 5 分钟、16 次模型请求和 128 次工具调用。停止本地输出不保证服务商停止计费。
 - 不同模型和服务商的效果仍需分别验证。单纯的 **Output token limit reached** 不是本插件的检测对象。
 
-v0.2.2 通过了 52 项本地测试，包括中英文界面切换；没有为这次更新调用真实模型。测试范围和细节见 [恢复验证记录](docs/RECOVERY_0_2_VALIDATION.md) 与 [早期 Web 验证记录](docs/VALIDATION.md)。项目使用 MIT 许可。
+v0.2.3 修复长会话在交接时因历史 compact 记录过大而暂停的问题：仍核对每次历史整理，只把次数与校验信息放入新 Agent 的交接。原始记录和已完成操作保留。本版通过 53 项本地测试；没有为这次更新调用真实模型。已暂停的旧恢复不会自行重启。测试范围和细节见 [恢复验证记录](docs/RECOVERY_0_2_VALIDATION.md) 与 [早期 Web 验证记录](docs/VALIDATION.md)。项目使用 MIT 许可。

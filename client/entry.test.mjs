@@ -172,6 +172,8 @@ test('known recovery reasons translate with DSH locale, and unknown codes use a 
   assert.ok(flatten(card.render()).some(x => x === '原因：需要确认此前工具或后台任务的状态'));
   f.setLocale('en');
   assert.ok(flatten(card.render()).some(x => x === 'Reason: Check the status of earlier tools or background jobs'));
+  card.render({...element.props, data: episode('BLOCKED', {reason: 'MANDATORY_FACTS_TOO_LARGE'})});
+  assert.ok(flatten(card.render()).some(x => x === 'Reason: Required handoff records exceeded the size limit; no new Agent was started'));
   card.render({...element.props, data: episode('BLOCKED', {reason: 'NEW_UNRECOGNIZED_REASON'})});
   assert.ok(flatten(card.render()).some(x => x === 'Reason: Recovery paused. Inspect the recovery session or contact the maintainer'));
   card.unmount(); panel.unmount();

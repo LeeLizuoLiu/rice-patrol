@@ -27,7 +27,7 @@ Recover makes at most one automatic attempt. If it cannot verify a background jo
 Tested with DSH `0.1.6-alpha.2`:
 
 ```sh
-dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.2
+dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.3
 ```
 
 Restart DSH Web, enable **both rice-patrol and its component** on the Plugins page, then choose a mode in its settings. Installing the package alone does not activate the guard.
@@ -39,4 +39,4 @@ Restart DSH Web, enable **both rice-patrol and its component** on the Plugins pa
 - Recover makes extra model calls. Its limits are 45 seconds for compaction and, for the new Agent, 5 minutes, 16 model requests, and 128 tool calls. Local cancellation does not prove provider billing has stopped.
 - Behavior still needs validation across models and providers. A plain **Output token limit reached** message is not a detection signal.
 
-v0.2.2 passed 52 local tests, including bilingual interface switching. This update made no real model calls. See the [recovery validation](docs/RECOVERY_0_2_VALIDATION.md) and [earlier Web validation](docs/VALIDATION.md) for test scope and technical details. MIT licensed.
+v0.2.3 keeps validated historical compactions in a compact provenance ledger, preventing long sessions from exceeding the mandatory handoff size limit. Original events and completed operation fingerprints remain intact. It passed 53 local tests; this update made no real model calls. A recovery already paused will not restart automatically. See the [recovery validation](docs/RECOVERY_0_2_VALIDATION.md) and [earlier Web validation](docs/VALIDATION.md) for test scope and technical details. MIT licensed.

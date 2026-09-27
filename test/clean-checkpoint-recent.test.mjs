@@ -48,3 +48,42 @@ test('settled tool errors remain recorded as uncertain work instead of blocking 
   assert.equal(checkpoint.mandatoryFacts.completedOperations[1].isError,true);
   assert.ok(checkpoint.completedSideEffectKeys.includes(keys[1]));
 });
+
+test('many validated historical compactions use a bounded provenance ledger in the handoff',()=>{
+  const events=[];let seq=0;
+  const append=(type,data,extra={})=>{const event={seq:++seq,type,data,...extra};events.push(event);return event};
+  append('turn/start',{turn:1});
+  const user=append('user/message',{role:'user',id:'user-1',source:{kind:'user'},
+    content:[{type:'text',text:'Complete the original task.'}]},{surfaceOp:'append'});
+  append('step/start',{turn:1,step:1});
+  let current=user.seq;
+  let shadowedIdChars=0;
+  for(let index=0;index<16;index++){
+    const compactionId=`compaction-${index}`;
+    const shadowedSeqs=[current];
+    for(let row=0;row<140;row++){
+      const message=append('assistant/message',{message:{content:[]}}, {surfaceOp:'append'});
+      shadowedSeqs.push(message.seq);
+    }
+    shadowedIdChars+=shadowedSeqs.reduce((sum,value)=>sum+`compacted-session#${value}`.length,0);
+    append('compaction/start',{compactionId,turn:1});
+    append('compaction/summary',{compactionId,shadowedRange:{start:current,end:shadowedSeqs.at(-1)},
+      shadowedSeqs,summary:[{type:'text',text:`model summary ${index}`}]});
+    const replacement=append('user/message',{role:'user',id:`summary-${index}`,
+      source:{kind:'plugin',plugin:'compact',compactionId},
+      content:[{type:'text',text:`model summary ${index}`}]},
+    {surfaceOp:{op:'replace',startSeq:current,endSeq:shadowedSeqs.at(-1)},sourceEventSeqs:shadowedSeqs});
+    append('compaction/end',{compactionId,turn:1});
+    current=replacement.seq;
+  }
+  append('step/end',{turn:1,step:1});append('turn/end',{turn:1,reason:{kind:'completed'}});
+  const checkpoint=buildCleanCheckpoint(events,{sessionId:'compacted-session',modelKey:'test-model',
+    guardEpisodeId:'guard-1',turnSettled:true,toolsSettled:true,recentHistory:true,
+    maxCleanInputChars:128000,maxMandatoryChars:48000});
+  assert.equal(checkpoint.mandatoryFacts.historicalCompactionLedger.count,16);
+  assert.ok(shadowedIdChars>48000,'full historical compaction ids would exceed the mandatory facts budget');
+  assert.match(checkpoint.mandatoryFacts.historicalCompactionLedger.sha256,/^[0-9a-f]{64}$/);
+  assert.equal(checkpoint.mandatoryFacts.historicalCompactionLedger.latestEndEventId,`compacted-session#${current+1}`);
+  assert.ok(!checkpoint.text.includes('model summary'));
+  assert.equal(checkpoint.mandatoryFacts.userMessages[0].text,'Complete the original task.');
+});
