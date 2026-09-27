@@ -1,5 +1,7 @@
 # Rice Patrol 🍚🐋
 
+[简体中文说明](README.zh-CN.md)
+
 Rice Patrol watches DSH reasoning streams for sustained short-line repetition. When enabled, it cancels the current turn through DSH's public API, builds a clean checkpoint from recorded user and tool events, and can let one fresh Agent resume the unfinished task. The whale gets one bowl, not an endless buffet.
 
 This is a DeepSeek Harness plugin, not a model provider. It uses `llm/stream`, `agent/request`, `Agent.cancel()`, and native subagents. It has no WorkBuddy dependency or provider-specific transport wrapper. It follows the provider, model, and reasoning effort selected for the triggering request.
