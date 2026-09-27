@@ -15,6 +15,8 @@ test('persisted active status becomes a blocked restart, never an automatic reco
 });
 test('default stop has no new request deadline; recovery tool and call limits reject broadening',()=>{
  const cfg=validateSettings({stateDirectory:'/tmp/example'});assert.equal(cfg.mode,'stop');assert.equal(cfg.requestDeadlineMs,undefined);
+ assert.equal(cfg.recoveryTools,'host');assert.equal(cfg.alwaysCompact,true);
+ assert.equal(cfg.maxResumeRequests,16);assert.equal(cfg.maxResumeToolCalls,128);
  assert.throws(()=>validateSettings({stateDirectory:'/tmp/example',recoveryTools:['shell']}));
  assert.throws(()=>validateSettings({stateDirectory:'/tmp/example',maxResumeRequests:100}));
 });

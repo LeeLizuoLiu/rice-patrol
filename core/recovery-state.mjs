@@ -1,5 +1,6 @@
 // Local prototype. An adapter must keep every external operation behind the
 // supplied signal and gates; this module does not register with DSH/Web.
+import {createHash} from 'node:crypto';
 const TERMINAL = new Set(['completed', 'user_interrupted', 'failed', 'budget_exhausted']);
 
 export class RecoveryStopped extends Error {
@@ -29,7 +30,7 @@ function mandatorySuffix(facts, completedKeys) {
       typeof item?.text !== 'string' || !item.text))
     throw new RecoveryStopped('MANDATORY_FACTS_INVALID');
   const operationKeys = facts.completedOperations.map(item => {
-    if (item?.status !== 'result-recorded' || typeof item.operationKey !== 'string' ||
+    if (!['result-recorded','error-recorded'].includes(item?.status) || typeof item.operationKey !== 'string' ||
         !item.operationKey || typeof item.callEventId !== 'string' ||
         typeof item.resultEventId !== 'string')
       throw new RecoveryStopped('MANDATORY_FACTS_INVALID');
@@ -37,7 +38,27 @@ function mandatorySuffix(facts, completedKeys) {
   });
   // Multiple recorded calls may share one stable operation key. Preserve every
   // row for provenance, but compare the deduplicated prohibition set.
-  if (!sameKeys([...new Set(operationKeys)], completedKeys))
+  if (facts.completedOperationLedger) {
+    const ledger=facts.completedOperationLedger;
+    const digest=createHash('sha256').update(JSON.stringify(completedKeys)).digest('hex');
+    if (!Number.isSafeInteger(ledger.count)||ledger.count<operationKeys.length||
+        ledger.uniqueCount!==completedKeys.length||ledger.sha256!==digest||
+        operationKeys.some(key=>!completedKeys.includes(key)))
+      throw new RecoveryStopped('MANDATORY_TOOL_LEDGER_MISMATCH');
+    if(!Array.isArray(facts.recentOperationWindow)||
+       facts.recentOperationWindow.length!==Math.min(ledger.count,128)||
+       facts.recentOperationWindow.some(item=>typeof item?.toolName!=='string'||
+         !Number.isSafeInteger(item.callSeq)||item.callSeq<0||
+         !Number.isSafeInteger(item.resultSeq)||item.resultSeq<=item.callSeq||
+         !['result-recorded','error-recorded'].includes(item.status))||
+       facts.completedOperations.some((item,index)=>{
+         const brief=facts.recentOperationWindow.at(index-facts.completedOperations.length);
+         return !brief||brief.callSeq!==Number(item.callEventId.split('#').at(-1))||
+           brief.resultSeq!==Number(item.resultEventId.split('#').at(-1))||
+           brief.toolName!==item.toolName||brief.status!==item.status;
+       }))
+      throw new RecoveryStopped('MANDATORY_TOOL_LEDGER_MISMATCH');
+  } else if (!sameKeys([...new Set(operationKeys)], completedKeys))
     throw new RecoveryStopped('MANDATORY_TOOL_LEDGER_MISMATCH');
   let serialized;
   try { serialized = JSON.stringify(facts); }
@@ -79,15 +100,17 @@ export class BoundedRecovery {
   #userRevision = new Map();
   #active = new Map();
   constructor({ stopTimeoutMs = 10_000, compactTimeoutMs = 15_000, resumeTimeoutMs = 60_000,
-    maxResumeRequests = 4, maxCleanInputChars = 48_000,
-    compactAboveChars = 8_000, maxCheckpointChars = 12_000 } = {}) {
+    maxResumeRequests = 4, maxResumeToolCalls = 64, maxCleanInputChars = 48_000,
+    compactAboveChars = 8_000, maxCheckpointChars = 12_000, alwaysCompact = false } = {}) {
     this.stopTimeoutMs = positiveInt(stopTimeoutMs, 'stopTimeoutMs');
     this.compactTimeoutMs = positiveInt(compactTimeoutMs, 'compactTimeoutMs');
     this.resumeTimeoutMs = positiveInt(resumeTimeoutMs, 'resumeTimeoutMs');
     this.maxResumeRequests = positiveInt(maxResumeRequests, 'maxResumeRequests');
+    this.maxResumeToolCalls = positiveInt(maxResumeToolCalls, 'maxResumeToolCalls');
     this.maxCleanInputChars = positiveInt(maxCleanInputChars, 'maxCleanInputChars');
     this.compactAboveChars = positiveInt(compactAboveChars, 'compactAboveChars');
     this.maxCheckpointChars = positiveInt(maxCheckpointChars, 'maxCheckpointChars');
+    this.alwaysCompact = alwaysCompact === true;
   }
 
   // Call for a real user cancellation or new user input, never for a guard event.
@@ -120,7 +143,7 @@ export class BoundedRecovery {
       if (typeof adapter?.[name] !== 'function') throw new TypeError(`adapter.${name} is required`);
     }
     const state = { state: 'settling', compactCalls: 0, resumeCalls: 0,
-      resumeRequests: 0, modelKey, taskId, reason: null };
+      resumeRequests: 0, resumeToolCalls: 0, modelKey, taskId, reason: null };
     // Reserve once before the first await. A replacement Agent must share this
     // taskId; otherwise the host has to persist/restore the ledger itself.
     this.#tasks.set(taskId, state);
@@ -167,7 +190,7 @@ export class BoundedRecovery {
       const suffix = mandatorySuffix(checkpoint.mandatoryFacts, completedOperationKeys);
       if (suffix.length >= this.maxCheckpointChars)
         throw new RecoveryStopped('MANDATORY_FACTS_TOO_LARGE');
-      if (checkpoint.text.length > this.compactAboveChars) {
+      if (this.alwaysCompact || checkpoint.text.length > this.compactAboveChars) {
         if (typeof adapter.compactCleanInput !== 'function')
           throw new RecoveryStopped('COMPACTION_REQUIRED');
         // Optional one-shot same-model summary, fed ONLY the clean checkpoint.
@@ -182,7 +205,7 @@ export class BoundedRecovery {
         if (!summary || summary.modelKey !== modelKey ||
             summary.usedOnlyCleanInput !== true ||
             typeof summary.text !== 'string' || !summary.text.trim() ||
-            summary.text.length >= checkpoint.text.length ||
+            checkpoint.text.length > this.compactAboveChars && summary.text.length >= checkpoint.text.length ||
             summary.text.length + suffix.length > this.maxCheckpointChars)
           throw new RecoveryStopped('INVALID_COMPACT_SUMMARY');
         checkpoint = { ...checkpoint, text: summary.text };
@@ -201,6 +224,9 @@ export class BoundedRecovery {
         },
         permitTool: ({ kind, operationKey }) => {
           check();
+          if(state.resumeToolCalls>=this.maxResumeToolCalls)
+            throw new RecoveryStopped('RESUME_TOOL_BUDGET');
+          state.resumeToolCalls++;
           if (kind === 'read') return;
           if (kind !== 'side-effect' || !operationKey || completed.has(operationKey))
             throw new RecoveryStopped('TOOL_REPLAY_OR_UNIDENTIFIED');

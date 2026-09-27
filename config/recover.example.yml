@@ -7,7 +7,9 @@
     model: '*'
     stateDirectory: /absolute/path/to/research-guard-state
     stopTimeoutMs: 10000
-    compactTimeoutMs: 15000
-    resumeTimeoutMs: 60000
-    maxResumeRequests: 4
-    recoveryTools: [read, glob, grep, write, edit]
+    compactTimeoutMs: 45000
+    resumeTimeoutMs: 300000
+    maxResumeRequests: 16
+    maxResumeToolCalls: 128
+    alwaysCompact: true
+    recoveryTools: host

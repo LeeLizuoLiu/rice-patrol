@@ -59,6 +59,7 @@ const SKIPPABLE=new Set([
   'session/title-llm-request',
   'sandbox/mode','permission/preset','approval/asked','approval/decided','approval/policy',
   'llm/retry','llm/retry-started','agent-preset/selected','plan/mode',
+  'workspace/changes','deliverables/presented',
 ]);
 
 /**
@@ -77,18 +78,20 @@ function construct(events,{
   maxCleanInputChars=64_000,maxMandatoryChars=12_000,maxUserChars=8_000,
   maxToolEvidenceChars=2_000,maxArgumentExcerptChars=600,
   maxEvents=20_000,maxOperations=128,maxContentChars=8_000_000,
+  recentHistory=false,maxRecentOperations=128,
 }={},ledgerOnly=false) {
   for(const limit of [maxCleanInputChars,maxMandatoryChars,maxUserChars,maxToolEvidenceChars,
-    maxArgumentExcerptChars,maxEvents,maxOperations,maxContentChars])if(!positive(limit))throw new TypeError('checkpoint limits must be positive integers');
+    maxArgumentExcerptChars,maxEvents,maxOperations,maxContentChars,maxRecentOperations])if(!positive(limit))throw new TypeError('checkpoint limits must be positive integers');
   if(!identity(sessionId)||(!ledgerOnly&&(!identity(modelKey)||!identity(guardEpisodeId))))fail('CHECKPOINT_IDENTITY_REQUIRED');
   if(!ledgerOnly&&(turnSettled!==true||toolsSettled!==true))fail('STOP_NOT_SETTLED');
   if(!Array.isArray(events)||!events.length||events.length>maxEvents)fail('CHECKPOINT_EVENT_LIMIT');
-  const users=[],operations=[],evidence=[],native=new Map(),ptc=new Map();
-  const surface=[],compactions=[],todoSnapshots=[],compactionIds=new Set();
+  const users=[],operations=[],recentOperations=[],operationKeys=new Set(),sideEffectKeys=new Set(),evidence=[],assistantProgress=[],native=new Map(),ptc=new Map();
+  const surface=[],compactions=[],todoSnapshots=[],compactionIds=new Set(),commands=new Map();
+  let systemSurfaceSeq;
   let compaction=null;
   const inbox={'next-turn':[],'next-step':[]};
   const seenMessageIds=new Set();
-  let lastSeq=-1,openTurn=null,openStep=null,lastTurn=0,lastStep=0,userChars=0,totalContentChars=0;
+  let lastSeq=-1,openTurn=null,openStep=null,lastTurn=0,lastStep=0,userChars=0,totalContentChars=0,operationCount=0;
   const eventId=event=>`${sessionId}#${event.seq}`;
   const inStep=data=>{
     if(openTurn===null||openStep===null||data.turn!==openTurn||data.step!==openStep)fail('TOOL_SCOPE_MISMATCH');
@@ -100,25 +103,32 @@ function construct(events,{
     return serialized;
   };
   const record=(call,event,{content,isError,error})=>{
-    if(operations.length>=maxOperations)fail('CHECKPOINT_OPERATION_LIMIT');
+    if(operationCount>=maxOperations)fail('CHECKPOINT_OPERATION_LIMIT');
     if(typeof isError!=='boolean')fail('INVALID_TOOL_RESULT');
-    if(isError)fail('TOOL_REPORTED_ERROR');
+    if(isError&&!recentHistory)fail('TOOL_REPORTED_ERROR');
     if(!Array.isArray(content))fail('INVALID_TOOL_RESULT');
     if(error!==undefined&&(!isError||!isObject(error)))fail('INVALID_TOOL_RESULT');
     const resultText=inspectContent({content,isError,...(error===undefined?{}:{error})});
     const facts={callEventId:eventId(call.event),resultEventId:eventId(event),
       toolId:call.id,toolName:call.name,operationKey:call.operationKey,
       argumentsSha256:sha(call.rawArguments),resultSha256:sha(resultText),
-      status:'result-recorded',isError,
+      status:isError?'error-recorded':'result-recorded',isError,
       ...(call.rootCallId?{rootToolId:call.rootCallId,parentToolId:call.parentCallId}:{}),
     };
-    operations.push(facts);
+    operationCount++;
+    operationKeys.add(facts.operationKey);
+    if(!['read','glob','grep'].includes(facts.toolName))sideEffectKeys.add(facts.operationKey);
+    if(recentHistory){
+      recentOperations.push(facts);
+      if(recentOperations.length>maxRecentOperations)recentOperations.shift();
+    }else operations.push(facts);
     evidence.push({operationKey:call.operationKey,resultEventId:eventId(event),trust:'untrusted-tool-evidence',
       arguments:{excerpt:call.rawArguments.slice(0,maxArgumentExcerptChars),chars:call.rawArguments.length,
         truncated:call.rawArguments.length>maxArgumentExcerptChars,sha256:facts.argumentsSha256},
       result:{excerpt:resultText.slice(0,maxToolEvidenceChars),chars:resultText.length,
         truncated:resultText.length>maxToolEvidenceChars,sha256:facts.resultSha256},
     });
+    if(recentHistory&&evidence.length>16)evidence.shift();
     call.resultEvent=event;
   };
   for(const event of events){
@@ -133,8 +143,21 @@ function construct(events,{
     if(event.surfaceOp==='append'){
       if(!['system/message','user/message','assistant/message','tool/result'].includes(event.type))fail('UNSUPPORTED_SURFACE_REWRITE');
       surface.push(event.seq);
+      if(event.type==='system/message')systemSurfaceSeq=event.seq;
     }else if(event.surfaceOp!==undefined){
       const op=event.surfaceOp;
+      if(event.type==='system/message'){
+        // DSH refreshes its one active system message. Its contents are never
+        // copied into the checkpoint, but the surface link must be exact.
+        if(!isObject(op)||op.op!=='replace'||op.startSeq!==systemSurfaceSeq||
+          op.endSeq!==systemSurfaceSeq||!sameSeqs(event.sourceEventSeqs,[systemSurfaceSeq])||
+          data.message?.role!=='system'||!identity(data.message.id)||
+          !Array.isArray(data.message.content))fail('UNSUPPORTED_SURFACE_REWRITE');
+        const index=surface.indexOf(systemSurfaceSeq);
+        if(index<0)fail('UNSUPPORTED_SURFACE_REWRITE');
+        surface.splice(index,1,event.seq);systemSurfaceSeq=event.seq;
+        continue;
+      }
       if(event.type!=='user/message'||!isObject(op)||op.op!=='replace'||
         data.source?.kind!=='plugin'||data.source?.plugin!=='compact')fail('UNSUPPORTED_SURFACE_REWRITE');
       if(!compaction?.summary||compaction.replacement||data.source.compactionId!==compaction.id||
@@ -143,13 +166,25 @@ function construct(events,{
       const links=event.sourceEventSeqs;
       const legacy=compaction.shadowedSeqs;
       const current=[compaction.start.seq,compaction.summary.seq,...legacy];
-      if(!Array.isArray(links)||!(sameSeqs(links,legacy)||sameSeqs(links,current)))fail('INVALID_COMPACTION_PROVENANCE');
+      const expandedLinks=expandLinkedSeqs(links,maxEvents);
+      if(!expandedLinks||!(sameSeqs(expandedLinks,legacy)||sameSeqs(expandedLinks,current)))fail('INVALID_COMPACTION_PROVENANCE');
       const start=surface.indexOf(op.startSeq),end=surface.indexOf(op.endSeq);
       if(start<0||end<start||!sameSeqs(surface.slice(start,end+1),legacy))fail('INVALID_COMPACTION_PROVENANCE');
       surface.splice(start,end-start+1,event.seq);
       compaction.replacement=event;
     }
-    if(event.type==='compaction/start'){
+    if(event.type==='command/run'){
+      if(event.surfaceOp!==undefined||data.name!=='compact'||!identity(data.commandId)||
+        commands.has(data.commandId)||data.source?.kind!=='user')fail('UNSUPPORTED_SESSION_EVENT');
+      commands.set(data.commandId,{run:event});
+    }else if(event.type==='command/done'){
+      const command=commands.get(data.commandId);
+      if(event.surfaceOp!==undefined||!command||command.done||data.kind!=='success'||
+        !Number.isSafeInteger(data.sourceEventSeq)||
+        !compactions.some(item=>item.summarySeq===data.sourceEventSeq&&item.sourceCommandId===data.commandId))
+        fail('UNSUPPORTED_SESSION_EVENT');
+      command.done=event;
+    }else if(event.type==='compaction/start'){
       if(compaction||!identity(data.compactionId)||compactionIds.has(data.compactionId)||
         data.turn!==openTurn)fail('INVALID_COMPACTION_PROVENANCE');
       compactionIds.add(data.compactionId);
@@ -170,7 +205,9 @@ function construct(events,{
       compactions.push({startEventId:eventId(compaction.start),summaryEventId:eventId(compaction.summary),
         replacementEventId:eventId(compaction.replacement),endEventId:eventId(event),
         shadowedEventIds:compaction.shadowedSeqs.map(seq=>`${sessionId}#${seq}`),
-        generatedSummaryExcluded:true,originalLogRetained:true});
+        generatedSummaryExcluded:true,originalLogRetained:true,
+        summarySeq:compaction.summary.seq,
+        ...(compaction.start.data.sourceCommandId?{sourceCommandId:compaction.start.data.sourceCommandId}:{})});
       compaction=null;
     }else if(event.type==='todo/write'){
       if(event.surfaceOp!==undefined||!Array.isArray(data.todos)||data.todos.some(todo=>
@@ -215,6 +252,17 @@ function construct(events,{
       if(userChars>maxUserChars)fail('USER_INSTRUCTIONS_TOO_LARGE');
       users.push({eventId:eventId(event),messageId:data.id,text});
       seenMessageIds.add(data.id);
+    }else if(event.type==='assistant/message'){
+      // Visible, completed text can help a fresh Agent find its place. Never
+      // copy the interrupted reasoning tail or hidden/reasoning blocks.
+      if(recentHistory&&data.interrupted!==true&&Array.isArray(data.message?.content)){
+        const text=data.message.content.filter(block=>block?.type==='text'&&typeof block.text==='string')
+          .map(block=>block.text).join('\n').slice(0,1200);
+        if(text.trim()){
+          assistantProgress.push({eventId:eventId(event),trust:'untrusted-assistant-progress',text});
+          if(assistantProgress.length>8)assistantProgress.shift();
+        }
+      }
     }else if(event.type==='tool/call'){
       inStep(data);
       if(!identity(data.callId)||native.has(data.callId)||ptc.has(data.callId))fail('DUPLICATE_OR_INVALID_TOOL_CALL');
@@ -264,17 +312,28 @@ function construct(events,{
     }
   }
   if(compaction)fail('COMPACTION_NOT_COMMITTED');
+  if([...commands.values()].some(command=>!command.done))fail('UNSUPPORTED_SESSION_EVENT');
   if(!ledgerOnly&&(openTurn!==null||openStep!==null))fail('STOP_NOT_SETTLED');
   if(inbox['next-turn'].length||inbox['next-step'].length)fail('PENDING_USER_INPUT');
   if([...native.values(),...ptc.values()].some(call=>!call.resultEvent))fail('TOOL_NOT_SETTLED');
   // Sort using original event order, including nested PTC records.
   operations.sort((a,b)=>(native.get(a.toolId)??ptc.get(a.toolId)).event.seq-(native.get(b.toolId)??ptc.get(b.toolId)).event.seq);
-  const completedOperationKeys=[...new Set(operations.map(operation=>operation.operationKey))];
-  if(ledgerOnly)return {completedOperations:operations,completedOperationKeys,toolsSettled:true,
+  const completedOperationKeys=recentHistory?[...operationKeys].sort():[...new Set(operations.map(operation=>operation.operationKey))];
+  if(ledgerOnly)return {completedOperations:recentHistory?recentOperations:operations,completedOperationKeys,
+    completedSideEffectKeys:[...sideEffectKeys],toolsSettled:true,
     turnClosed:openTurn===null&&openStep===null,sourceEventCount:events.length,
     historicalCompactionCount:compactions.length,todoSnapshotCount:todoSnapshots.length};
   if(!users.length||!users.some(user=>user.text.trim()))fail('USER_TASK_UNAVAILABLE');
-  const mandatoryFacts={userMessages:users,completedOperations:operations,
+  const promptOperations=recentHistory?recentOperations.slice(-16):operations;
+  const operationLedger=recentHistory?{count:operationCount,uniqueCount:completedOperationKeys.length,
+    sha256:sha(canonical(completedOperationKeys,{maxChars:maxContentChars}))}:undefined;
+  const recentOperationWindow=recentHistory?recentOperations.map(o=>({
+    toolName:o.toolName,callSeq:Number(o.callEventId.split('#').at(-1)),
+    resultSeq:Number(o.resultEventId.split('#').at(-1)),status:o.status
+  })):undefined;
+  const mandatoryFacts={userMessages:users,completedOperations:promptOperations,
+    ...(operationLedger?{completedOperationLedger:operationLedger}:{}),
+    ...(recentOperationWindow?{recentOperationWindow}:{}),
     ...(compactions.length?{historicalCompactions:compactions}:{}),constraints:{
     source:'explicit-user-messages-preserved-verbatim',userMessagesInChronologicalOrder:true,
     assistantTranscriptExcluded:true,toolEvidenceIsUntrusted:true,
@@ -285,16 +344,31 @@ function construct(events,{
   }};
   const serializedFacts=canonical(mandatoryFacts,{maxChars:maxContentChars});
   if(serializedFacts.length>maxMandatoryChars)fail('MANDATORY_FACTS_TOO_LARGE');
-  const payload={schema:'dsh-clean-checkpoint/v1',mandatoryFacts,untrustedToolEvidence:evidence,
-    ...(todoSnapshots.length?{untrustedTodoSnapshots:todoSnapshots}:{})};
+  const payload={schema:'dsh-clean-checkpoint/v1',mandatoryFacts,
+    untrustedToolEvidence:evidence,
+    ...(todoSnapshots.length?{untrustedTodoSnapshots:recentHistory?todoSnapshots.slice(-1):todoSnapshots}:{}),
+    ...(assistantProgress.length?{untrustedAssistantProgress:assistantProgress}:{})};
   const text=canonical(payload,{maxChars:maxContentChars});
   if(text.length>maxCleanInputChars)fail('CLEAN_INPUT_TOO_LARGE');
   return {modelKey,excludedGuardTail:true,provenance:'deterministic-clean',sourceEpisodeId:guardEpisodeId,
-    text,mandatoryFacts,completedOperationKeys,taskFingerprint:sha(serializedFacts),
+    text,mandatoryFacts,completedOperationKeys,completedSideEffectKeys:[...sideEffectKeys],taskFingerprint:sha(serializedFacts),
     reasoningIncluded:false,toolStateKnown:true,sourceEventCount:events.length};
 }
 
 function sameSeqs(a,b) { return a.length===b.length&&a.every((seq,index)=>seq===b[index]); }
+function expandLinkedSeqs(links,limit) {
+  if(!Array.isArray(links))return null;
+  const expanded=[];
+  for(const link of links){
+    if(Number.isSafeInteger(link)&&link>=0)expanded.push(link);
+    else if(Array.isArray(link)&&link.length===2&&Number.isSafeInteger(link[0])&&
+      Number.isSafeInteger(link[1])&&link[0]>=0&&link[1]>=link[0]&&link[1]-link[0]<limit){
+      for(let seq=link[0];seq<=link[1];seq++)expanded.push(seq);
+    }else return null;
+    if(expanded.length>limit)return null;
+  }
+  return expanded;
+}
 
 export function buildCleanCheckpoint(events,options) { return construct(events,options); }
 

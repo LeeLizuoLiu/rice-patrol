@@ -188,7 +188,7 @@ test('generic public API: AgentLoop cancels upstream and fresh same-route child 
   const result=await runScenario('normal');
   assert.equal(result.status.state,'COMPLETED',JSON.stringify(result.status));
   assert.equal(result.stats.record,1);assert.equal(result.stats.children.length,1);
-  assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','child','child']);
+  assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','compact','child','child']);
   assert.equal(endOf(result.childEvents[0])?.kind,'completed');
 });
 
@@ -204,7 +204,7 @@ test('generic public API: second loop stops the only child without another recov
   const result=await runScenario('child-loop');
   assert.equal(result.stats.record,1,JSON.stringify(result.status));assert.equal(result.stats.children.length,1);
   assert.equal(result.status.state,'BLOCKED');
-  assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','child','child']);
+  assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','compact','child','child']);
   assert.equal(endOf(result.childEvents[0])?.kind,'aborted');
 });
 
@@ -214,6 +214,13 @@ test('generic public API: clean compaction makes one call with the original rout
   assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','compact','child','child']);
   assert.equal(result.status.compactCalls,1);
   assert.ok(!JSON.stringify(result.stats.requests.find(request=>request.kind==='compact').payload.messages).includes('Let me try.'));
+});
+
+test('generic public API: host tool scope preserves ordinary recovery tools',{timeout:10000},async()=>{
+  const result=await runScenario('normal',{settings:{recoveryTools:'host'}});
+  assert.equal(result.status.state,'COMPLETED',JSON.stringify(result.status));
+  assert.equal(result.stats.record,1);
+  assert.equal(result.status.compactCalls,1);
 });
 
 test('generic public API: user stop during compact cancels auxiliary stream and creates no child',{timeout:10000},async()=>{
