@@ -20,14 +20,14 @@ Choose a mode in **Plugins → rice-patrol**:
 | **Observe** | Record the signal without stopping the task. |
 | **Recover** | Stop the task, compact verified work records, and let one fresh Agent try to continue. |
 
-Recover makes at most one automatic attempt. If it cannot verify a background job or tool result, it pauses for you instead of guessing. Finished or blocked reminders have a dismiss button; their records remain. Changing mode requires a DSH Web restart and does not change an in-flight task.
+Recover makes at most one automatic attempt. If it cannot verify a background job or tool result, it pauses for you instead of guessing. Finished or blocked reminders have a dismiss button; their records remain. Buttons and explanations follow the DSH interface language (Chinese or English). When no language is explicitly selected in DSH, it uses the browser's system language preference. Changing mode requires a DSH Web restart and does not change an in-flight task.
 
 ## Install
 
 Tested with DSH `0.1.6-alpha.2`:
 
 ```sh
-dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.1
+dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.2
 ```
 
 Restart DSH Web, enable **both rice-patrol and its component** on the Plugins page, then choose a mode in its settings. Installing the package alone does not activate the guard.
@@ -39,4 +39,4 @@ Restart DSH Web, enable **both rice-patrol and its component** on the Plugins pa
 - Recover makes extra model calls. Its limits are 45 seconds for compaction and, for the new Agent, 5 minutes, 16 model requests, and 128 tool calls. Local cancellation does not prove provider billing has stopped.
 - Behavior still needs validation across models and providers. A plain **Output token limit reached** message is not a detection signal.
 
-v0.2.1 passed 51 local tests. This documentation edit made no real model calls. See the [recovery validation](docs/RECOVERY_0_2_VALIDATION.md) and [earlier Web validation](docs/VALIDATION.md) for test scope and technical details. MIT licensed.
+v0.2.2 passed 52 local tests, including bilingual interface switching. This update made no real model calls. See the [recovery validation](docs/RECOVERY_0_2_VALIDATION.md) and [earlier Web validation](docs/VALIDATION.md) for test scope and technical details. MIT licensed.

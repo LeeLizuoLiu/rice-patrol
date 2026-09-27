@@ -4,40 +4,127 @@ window.__ModuleLoader__.load({
   factory(require) {
     const {createElement: h, useState, useEffect, useRef} = require('react');
     const ACTIVE = new Set(['STOPPING', 'PREPARING', 'COMPACTING', 'RECOVERING']);
-    const labels = {
-      STOPPING: '正在停止原请求', PREPARING: '正在准备恢复', COMPACTING: '正在整理恢复交接',
-      RECOVERING: '正在恢复任务', COMPLETED: '恢复已完成', FAILED: '恢复未完成',
-      STOPPED: '恢复已停止', INTERRUPTED: '恢复已中断', BLOCKED: '恢复需要处理',
-      OBSERVED: '已记录重复信号'
+    const NS = 'ricePatrol';
+    const zh = {
+      'settings.aria': 'Rice Patrol 设置',
+      'settings.title': 'Rice Patrol · 重复输出保护',
+      'settings.intro': '选择检测到持续短句重复时的处理方式。此设置不处理普通的输出 token 上限。',
+      'settings.mode': '处理模式',
+      'settings.observe': '仅观察：记录，不停止',
+      'settings.stop': '停止：确认重复后截断',
+      'settings.recover': '恢复：截断、整理交接并继续',
+      'settings.limits': '恢复有固定次数和超时上限；遇到不确定的工具或后台任务会停止并提示。',
+      'settings.readOnly': '当前设置不可写。',
+      'settings.saved': '已保存。重启 DSH Web 后，新的模式才会生效；正在运行的任务不变。',
+      'settings.saveFailed': '保存失败。请检查连接和设置写入权限。',
+      'status.aria': '任务恢复状态',
+      'status.title': '任务恢复 · {state}',
+      'status.reason': '原因：{reason}',
+      'status.requests': '恢复请求 {count}',
+      'status.compactCalls': '交接整理 {count}',
+      'status.child': '查看恢复会话与结果',
+      'status.stop': '停止恢复',
+      'status.stopping': '正在请求停止…',
+      'status.dismiss': '关闭提醒',
+      'status.dismissing': '正在关闭…',
+      'status.stopFailed': '停止请求未成功，请重试。',
+      'status.noLongerRunning': '此恢复已不在运行，等待状态更新。',
+      'status.stopRequested': '已请求停止，等待恢复任务结束。',
+      'status.connectionFailed': '连接未完成，请检查连接后重试。',
+      'status.dismissFailed': '暂时无法关闭提醒，请刷新后重试。',
+      'status.readFailed': '恢复状态暂时无法读取；已有状态可能已过期。',
+      'state.STOPPING': '正在停止原请求', 'state.PREPARING': '正在准备恢复',
+      'state.COMPACTING': '正在整理恢复交接', 'state.RECOVERING': '正在恢复任务',
+      'state.COMPLETED': '恢复已完成', 'state.FAILED': '恢复未完成',
+      'state.STOPPED': '恢复已停止', 'state.INTERRUPTED': '恢复已中断',
+      'state.BLOCKED': '恢复需要处理', 'state.OBSERVED': '已记录重复信号',
+      'reason.USER_INTERRUPTED': '你已停止恢复，或提交了新的任务',
+      'reason.PARENT_CANCELLED': '恢复已随原任务停止',
+      'reason.STREAM_CLEANUP_UNSETTLED': '原请求的流尚未完成退出，恢复已停止',
+      'reason.RECOVERY_ROUTE_MISMATCH': '模型配置已改变，恢复已停止',
+      'reason.EXTERNAL_TOOL_RECONCILIATION_REQUIRED': '需要确认此前工具或后台任务的状态',
+      'reason.JOB_REGISTRY_UNAVAILABLE': '无法读取后台任务状态，恢复已停止',
+      'reason.ACTIVE_OR_UNREPORTED_JOB': '还有未结束或未确认结果的后台任务，请先处理',
+      'reason.TOOL_REPORTED_ERROR': '此前工具曾报错，需要确认结果',
+      'reason.TOOL_REPLAY_OR_UNIDENTIFIED': '已阻止可能重复的操作',
+      'reason.SECOND_GUARD_CONFIRMATION': '恢复后再次检测到重复，已停止',
+      'reason.HOST_RESTARTED': '应用重启，自动恢复未继续',
+      'reason.STOP_TIMEOUT': '原请求未能及时结束，恢复已停止',
+      'reason.RESUME_TIMEOUT': '恢复已达到时间上限',
+      'reason.COMPACTION_TIMEOUT': '整理恢复交接已达到时间上限',
+      'reason.RESUME_REQUEST_BUDGET': '恢复已达到请求次数上限',
+      'reason.RESUME_TOOL_BUDGET': '恢复已达到工具调用次数上限',
+      'reason.COMPACTION_REQUEST_BUDGET': '整理恢复交接已达到请求次数上限',
+      'reason.REPETITION_CONFIRMED': '已确认重复，正在处理',
+      'reason.USER_STOP': '你已停止恢复', 'reason.USER_CANCELLED': '你已取消恢复',
+      'reason.NEW_USER_INPUT': '已收到新输入，之前的恢复已结束',
+      'reason.PLUGIN_DISPOSED': '插件已关闭，恢复已停止',
+      'reason.RECOVERY_FAILED': '恢复未能完成，请查看恢复会话',
+      'reason.RECOVERY_COMPLETED': '恢复任务已完成',
+      'reason.OBSERVE_ONLY': '观察模式已记录重复信号',
+      'reason.unknown': '恢复已暂停，请查看恢复会话或联系维护者'
     };
-    const reasons = {
-      USER_INTERRUPTED: '你已停止恢复，或提交了新的任务', PARENT_CANCELLED: '恢复已随原任务停止',
-      STREAM_CLEANUP_UNSETTLED: '原请求的流尚未完成退出，恢复已停止',
-      RECOVERY_ROUTE_MISMATCH: '模型配置已改变，恢复已停止',
-      EXTERNAL_TOOL_RECONCILIATION_REQUIRED: '需要确认此前工具或后台任务的状态',
-      JOB_REGISTRY_UNAVAILABLE: '无法读取后台任务状态，恢复已停止',
-      ACTIVE_OR_UNREPORTED_JOB: '还有未结束或未确认结果的后台任务，请先处理',
-      TOOL_REPORTED_ERROR: '此前工具曾报错，需要确认结果',
-      TOOL_REPLAY_OR_UNIDENTIFIED: '已阻止可能重复的操作',
-      SECOND_GUARD_CONFIRMATION: '恢复后再次检测到重复，已停止',
-      HOST_RESTARTED: '应用重启，自动恢复未继续',
-      STOP_TIMEOUT: '原请求未能及时结束，恢复已停止',
-      RESUME_TIMEOUT: '恢复已达到时间上限',
-      COMPACTION_TIMEOUT: '整理恢复交接已达到时间上限',
-      RESUME_REQUEST_BUDGET: '恢复已达到请求次数上限',
-      RESUME_TOOL_BUDGET: '恢复已达到工具调用次数上限',
-      COMPACTION_REQUEST_BUDGET: '整理恢复交接已达到请求次数上限',
-      REPETITION_CONFIRMED: '已确认重复，正在处理',
-      USER_STOP: '你已停止恢复',
-      USER_CANCELLED: '你已取消恢复',
-      NEW_USER_INPUT: '已收到新输入，之前的恢复已结束',
-      PLUGIN_DISPOSED: '插件已关闭，恢复已停止',
-      RECOVERY_FAILED: '恢复未能完成，请查看恢复会话',
-      RECOVERY_COMPLETED: '恢复任务已完成',
-      OBSERVE_ONLY: '观察模式已记录重复信号'
+    const en = {
+      'settings.aria': 'Rice Patrol settings',
+      'settings.title': 'Rice Patrol · Repetition guard',
+      'settings.intro': 'Choose what happens when sustained short-line repetition is confirmed. This does not handle an ordinary output token limit.',
+      'settings.mode': 'Response mode',
+      'settings.observe': 'Observe: record without stopping',
+      'settings.stop': 'Stop: interrupt confirmed repetition',
+      'settings.recover': 'Recover: stop, compact, and continue',
+      'settings.limits': 'Recovery has fixed time and call limits. It pauses when a tool result or background job cannot be verified.',
+      'settings.readOnly': 'These settings are read-only.',
+      'settings.saved': 'Saved. Restart DSH Web to apply the new mode. Running tasks keep their current mode.',
+      'settings.saveFailed': 'Could not save. Check the connection and settings permissions.',
+      'status.aria': 'Task recovery status',
+      'status.title': 'Task recovery · {state}',
+      'status.reason': 'Reason: {reason}',
+      'status.requests': 'Recovery requests {count}',
+      'status.compactCalls': 'Compactions {count}',
+      'status.child': 'View recovery session and result',
+      'status.stop': 'Stop recovery',
+      'status.stopping': 'Requesting stop…',
+      'status.dismiss': 'Dismiss reminder',
+      'status.dismissing': 'Dismissing…',
+      'status.stopFailed': 'The stop request failed. Try again.',
+      'status.noLongerRunning': 'Recovery is no longer running. Waiting for the status to update.',
+      'status.stopRequested': 'Stop requested. Waiting for recovery to end.',
+      'status.connectionFailed': 'Connection did not complete. Check it and try again.',
+      'status.dismissFailed': 'Could not dismiss the reminder. Refresh and try again.',
+      'status.readFailed': 'Recovery status is temporarily unavailable. The displayed status may be stale.',
+      'state.STOPPING': 'Stopping the original request', 'state.PREPARING': 'Preparing recovery',
+      'state.COMPACTING': 'Compacting the handoff', 'state.RECOVERING': 'Recovering the task',
+      'state.COMPLETED': 'Recovery completed', 'state.FAILED': 'Recovery did not complete',
+      'state.STOPPED': 'Recovery stopped', 'state.INTERRUPTED': 'Recovery interrupted',
+      'state.BLOCKED': 'Recovery needs attention', 'state.OBSERVED': 'Repetition recorded',
+      'reason.USER_INTERRUPTED': 'You stopped recovery or sent a new task',
+      'reason.PARENT_CANCELLED': 'Recovery stopped with the original task',
+      'reason.STREAM_CLEANUP_UNSETTLED': 'The original stream did not finish closing; recovery stopped',
+      'reason.RECOVERY_ROUTE_MISMATCH': 'The model configuration changed; recovery stopped',
+      'reason.EXTERNAL_TOOL_RECONCILIATION_REQUIRED': 'Check the status of earlier tools or background jobs',
+      'reason.JOB_REGISTRY_UNAVAILABLE': 'Background job status is unavailable; recovery stopped',
+      'reason.ACTIVE_OR_UNREPORTED_JOB': 'A background job is still running or its result is unconfirmed',
+      'reason.TOOL_REPORTED_ERROR': 'An earlier tool reported an error; check its result',
+      'reason.TOOL_REPLAY_OR_UNIDENTIFIED': 'A possibly repeated operation was blocked',
+      'reason.SECOND_GUARD_CONFIRMATION': 'Repetition was detected again after recovery; stopped',
+      'reason.HOST_RESTARTED': 'The app restarted; automatic recovery did not continue',
+      'reason.STOP_TIMEOUT': 'The original request did not stop in time',
+      'reason.RESUME_TIMEOUT': 'Recovery reached its time limit',
+      'reason.COMPACTION_TIMEOUT': 'Compaction reached its time limit',
+      'reason.RESUME_REQUEST_BUDGET': 'Recovery reached its model request limit',
+      'reason.RESUME_TOOL_BUDGET': 'Recovery reached its tool call limit',
+      'reason.COMPACTION_REQUEST_BUDGET': 'Compaction reached its request limit',
+      'reason.REPETITION_CONFIRMED': 'Repetition confirmed; processing',
+      'reason.USER_STOP': 'You stopped recovery', 'reason.USER_CANCELLED': 'You cancelled recovery',
+      'reason.NEW_USER_INPUT': 'New input received; the earlier recovery ended',
+      'reason.PLUGIN_DISPOSED': 'The plugin was disabled; recovery stopped',
+      'reason.RECOVERY_FAILED': 'Recovery could not finish; inspect the recovery session',
+      'reason.RECOVERY_COMPLETED': 'The recovered task completed',
+      'reason.OBSERVE_ONLY': 'Observe mode recorded a repetition signal',
+      'reason.unknown': 'Recovery paused. Inspect the recovery session or contact the maintainer'
     };
-    const reasonText = reason => reasons[reason] ?? (/^[A-Z0-9_-]+$/.test(reason)
-      ? '恢复已暂停，请查看恢复会话或联系维护者' : reason);
+    const reasonText = (reason, t) => Object.hasOwn(zh, `reason.${reason}`)
+      ? t(`reason.${reason}`) : /^[A-Z0-9_-]+$/.test(reason) ? t('reason.unknown') : reason;
     const id = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,180}$/.test(value);
     function readStatus(d) {
       if (!d || d.schema !== 1 || !id(d.episodeId) || typeof d.state !== 'string' ||
@@ -69,7 +156,7 @@ window.__ModuleLoader__.load({
       button: {font: 'inherit', fontSize: 12, padding: '5px 9px', borderRadius: 7,
         border: '1px solid var(--dsw-alias-border-l1, #7777)', color: 'inherit', background: 'transparent', cursor: 'pointer'}
     };
-    function ModeSettingsPage({scope}) {
+    function ModeSettingsPage({scope, t}) {
       const [snapshot, setSnapshot] = useState(() => scope.getSnapshot());
       const [pending, setPending] = useState(false);
       const [notice, setNotice] = useState('');
@@ -81,26 +168,26 @@ window.__ModuleLoader__.load({
         setPending(true); setNotice('');
         try {
           await scope.set('mode', next);
-          setNotice('已保存。重启 DSH Web 后，新的模式才会生效；正在运行的任务不变。');
+          setNotice('settings.saved');
         } catch {
-          setNotice('保存失败。请检查连接和设置写入权限。');
+          setNotice('settings.saveFailed');
         } finally { setPending(false); }
       }
-      return h('section', {'aria-label': 'Rice Patrol 设置', style: style.card},
-        h('div', {style: style.title}, 'Rice Patrol · 重复输出保护'),
-        h('p', {style: style.text}, '选择检测到持续短句重复时的处理方式。此设置不处理普通的输出 token 上限。'),
-        h('label', {style: style.text, htmlFor: 'rice-patrol-mode'}, '处理模式'),
-        h('select', {id: 'rice-patrol-mode', 'aria-label': '处理模式', value: mode,
+      return h('section', {'aria-label': t('settings.aria'), style: style.card},
+        h('div', {style: style.title}, t('settings.title')),
+        h('p', {style: style.text}, t('settings.intro')),
+        h('label', {style: style.text, htmlFor: 'rice-patrol-mode'}, t('settings.mode')),
+        h('select', {id: 'rice-patrol-mode', 'aria-label': t('settings.mode'), value: mode,
           disabled: pending || !snapshot.writable || snapshot.status !== 'ready', onChange: choose,
           style: {...style.button, display: 'block', marginTop: 6, minWidth: 220}},
-          h('option', {value: 'observe'}, '仅观察：记录，不停止'),
-          h('option', {value: 'stop'}, '停止：确认重复后截断'),
-          h('option', {value: 'recover'}, '恢复：截断、整理交接并继续')),
-        h('p', {style: style.text}, '恢复有固定次数和超时上限；遇到不确定的工具或后台任务会停止并提示。'),
-        !snapshot.writable ? h('p', {role: 'status', style: style.text}, '当前设置不可写。') : null,
-        notice ? h('p', {role: 'status', style: style.text}, notice) : null);
+          h('option', {value: 'observe'}, t('settings.observe')),
+          h('option', {value: 'stop'}, t('settings.stop')),
+          h('option', {value: 'recover'}, t('settings.recover'))),
+        h('p', {style: style.text}, t('settings.limits')),
+        !snapshot.writable ? h('p', {role: 'status', style: style.text}, t('settings.readOnly')) : null,
+        notice ? h('p', {role: 'status', style: style.text}, t(notice)) : null);
     }
-    function createPanel(ctx) {
+    function createPanel(ctx, t) {
       function StatusCard({data, sessionId, refresh}) {
         const [pending, setPending] = useState(false);
         const [notice, setNotice] = useState('');
@@ -122,12 +209,12 @@ window.__ModuleLoader__.load({
             const response = await ctx.connection.rpc.call('/api', 'research-guard/stop',
               {sessionId, episodeId: data.episodeId}, controller.signal);
             if (!alive.current) return;
-            if (!response?.ok) setNotice('停止请求未成功，请重试。');
-            else if (response.value?.accepted === false) setNotice('此恢复已不在运行，等待状态更新。');
-            else setNotice('已请求停止，等待恢复任务结束。');
+            if (!response?.ok) setNotice('status.stopFailed');
+            else if (response.value?.accepted === false) setNotice('status.noLongerRunning');
+            else setNotice('status.stopRequested');
             refresh();
           } catch {
-            if (alive.current) setNotice('连接未完成，请检查连接后重试。');
+            if (alive.current) setNotice('status.connectionFailed');
           } finally {
             clearTimeout(timeout);
             if (actionRequest.current === controller) actionRequest.current = null;
@@ -145,32 +232,35 @@ window.__ModuleLoader__.load({
               {sessionId, episodeId: data.episodeId}, controller.signal);
             if (!alive.current) return;
             if (response?.ok && response.value?.dismissed === true) refresh();
-            else setNotice('暂时无法关闭提醒，请刷新后重试。');
+            else setNotice('status.dismissFailed');
           } catch {
-            if (alive.current) setNotice('连接未完成，请检查连接后重试。');
+            if (alive.current) setNotice('status.connectionFailed');
           } finally {
             clearTimeout(timeout);
             if (actionRequest.current === controller) actionRequest.current = null;
             if (alive.current) setPending(false);
           }
         }
-        const children = [h('div', {key: 'title', style: style.title}, `任务恢复 · ${labels[data.state] ?? data.state}`)];
-        if (data.reason) children.push(h('div', {key: 'reason', style: style.text, title: data.reason}, `原因：${reasonText(data.reason)}`));
+        const stateKey = `state.${data.state}`;
+        const stateText = Object.hasOwn(zh, stateKey) ? t(stateKey) : data.state;
+        const children = [h('div', {key: 'title', style: style.title}, t('status.title', {state: stateText}))];
+        if (data.reason) children.push(h('div', {key: 'reason', style: style.text, title: data.reason},
+          t('status.reason', {reason: reasonText(data.reason, t)})));
         const counts = [];
-        if (data.requests !== undefined) counts.push(`恢复请求 ${data.requests}`);
-        if (data.compactCalls !== undefined) counts.push(`交接整理 ${data.compactCalls}`);
+        if (data.requests !== undefined) counts.push(t('status.requests', {count: data.requests}));
+        if (data.compactCalls !== undefined) counts.push(t('status.compactCalls', {count: data.compactCalls}));
         if (counts.length) children.push(h('div', {key: 'counts', style: style.text}, counts.join(' · ')));
         const actions = [];
         if (data.childSessionId) actions.push(h('button', {key: 'child', type: 'button', style: style.button,
           onClick: () => ctx.uiWorkspace.openSession({childSessionId: data.childSessionId,
-            parentSessionId: sessionId, mode: 'one-shot'})}, '查看恢复会话与结果'));
+            parentSessionId: sessionId, mode: 'one-shot'})}, t('status.child')));
         if (active) actions.push(h('button', {key: 'stop', type: 'button', disabled: pending,
-          style: style.button, onClick: stop}, pending ? '正在请求停止…' : '停止恢复'));
+          style: style.button, onClick: stop}, t(pending ? 'status.stopping' : 'status.stop')));
         else actions.push(h('button', {key: 'dismiss', type: 'button', disabled: pending,
-          style: style.button, onClick: dismiss}, pending ? '正在关闭…' : '关闭提醒'));
+          style: style.button, onClick: dismiss}, t(pending ? 'status.dismissing' : 'status.dismiss')));
         if (actions.length) children.push(h('div', {key: 'actions', style: style.actions}, actions));
-        if (notice) children.push(h('div', {key: 'notice', role: 'status', style: style.text}, notice));
-        return h('section', {'aria-label': '任务恢复状态', 'data-research-guard-episode': data.episodeId,
+        if (notice) children.push(h('div', {key: 'notice', role: 'status', style: style.text}, t(notice)));
+        return h('section', {'aria-label': t('status.aria'), 'data-research-guard-episode': data.episodeId,
           'data-research-guard-state': data.state, style: style.card}, children);
       }
       return function RecoveryPanel({sessionId}) {
@@ -203,18 +293,21 @@ window.__ModuleLoader__.load({
         return h('div', {'data-research-guard-panel': 'true'},
           ...view.episodes.map(data => h(StatusCard, {key: `${sessionId}:${data.episodeId}`, data, sessionId,
             refresh: () => setRevision(n => n + 1)})),
-          view.error ? h('div', {role: 'status', style: style.text}, '恢复状态暂时无法读取；已有状态可能已过期。') : null);
+          view.error ? h('div', {role: 'status', style: style.text}, t('status.readFailed')) : null);
       };
     }
     function apply(ctx) {
+      ctx.effect(() => ctx.locale.register(NS, {zh, en}), 'rice-patrol translations');
+      const t = ctx.locale.bind(NS);
       // A public additive slot; no replacement of composer or transcript.
       ctx.slots.inject('conversation.input.dock', () => ctx.slots.register(
-        {name: 'conversation.input.dock', id: 'research-guard-status', order: 30}, createPanel(ctx)));
+        {name: 'conversation.input.dock', id: 'research-guard-status', order: 30, locale: NS},
+        createPanel(ctx, t)));
       const scope = ctx.settingsScope.bind({namespace: 'rice-patrol'});
       ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register(
-        {name: 'plugins.bundle.config', key: 'dsh-rice-patrol'},
-        seat => seat.view === 'page' ? h(ModeSettingsPage, {scope}) : null));
+        {name: 'plugins.bundle.config', key: 'dsh-rice-patrol', locale: NS},
+        seat => seat.view === 'page' ? h(ModeSettingsPage, {scope, t}) : null));
     }
-    return {inject: ['slots', 'connection', 'uiWorkspace', 'settingsScope'], apply};
+    return {inject: ['slots', 'connection', 'uiWorkspace', 'settingsScope', 'locale'], apply};
   }
 });

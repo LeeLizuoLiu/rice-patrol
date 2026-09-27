@@ -20,14 +20,14 @@ Rice Patrol 是 DeepSeek Harness（DSH）的“唱歌”拦截插件。“唱歌
 | **Observe** | 只记录，不停止任务。 |
 | **Recover** | 停止当前任务，整理已确认的工作记录，做一次 compact，再让一个新 Agent 尝试接着做。 |
 
-Recover 最多自动尝试一次。若后台工作或工具结果无法核对，它会停下来提示你，不会猜测结果。恢复完成或受阻后，可点“关闭提醒”；记录仍会保留。模式保存后需重启 DSH Web 才生效，运行中的任务不会中途换模式。
+Recover 最多自动尝试一次。若后台工作或工具结果无法核对，它会停下来提示你，不会猜测结果。恢复完成或受阻后，可点“关闭提醒”；记录仍会保留。插件按钮和说明跟随 DSH 的界面语言（中文或英文）；DSH 没有手动指定语言时，会参考浏览器的系统语言偏好。模式保存后需重启 DSH Web 才生效，运行中的任务不会中途换模式。
 
 ## 安装
 
 目前按 DSH `0.1.6-alpha.2` 测试。在终端运行：
 
 ```sh
-dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.1
+dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.2
 ```
 
 重启 DSH Web，在 **Plugins** 页面启用 rice-patrol **及其组件**，再到插件设置里选择模式。只安装插件、没有启用组件时，拦截不会工作。
@@ -39,4 +39,4 @@ dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.1
 - Recover 会额外调用模型，并有上限：compact 最多 45 秒；新 Agent 最多 5 分钟、16 次模型请求和 128 次工具调用。停止本地输出不保证服务商停止计费。
 - 不同模型和服务商的效果仍需分别验证。单纯的 **Output token limit reached** 不是本插件的检测对象。
 
-v0.2.1 通过了 51 项本地测试，没有为这次文档更新调用真实模型。测试范围和细节见 [恢复验证记录](docs/RECOVERY_0_2_VALIDATION.md) 与 [早期 Web 验证记录](docs/VALIDATION.md)。项目使用 MIT 许可。
+v0.2.2 通过了 52 项本地测试，包括中英文界面切换；没有为这次更新调用真实模型。测试范围和细节见 [恢复验证记录](docs/RECOVERY_0_2_VALIDATION.md) 与 [早期 Web 验证记录](docs/VALIDATION.md)。项目使用 MIT 许可。

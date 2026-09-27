@@ -6,7 +6,7 @@ import vm from 'node:vm';
 const source = await readFile(new URL('./entry.mjs', import.meta.url), 'utf8');
 function fixture(initial) {
   const calls = [], opened = [], timers = new Map();
-  let current, bundle, Panel, SettingsPage, nextTimer = 0;
+  let current, bundle, Panel, SettingsPage, nextTimer = 0, activeLocale = 'zh', dictionaries;
   let settingsSnapshot = {status: 'ready', writable: true, value: {mode: 'recover'}};
   const settingsListeners = new Set(), settingsWrites = [];
   const React = {
@@ -35,7 +35,25 @@ function fixture(initial) {
   vm.runInNewContext(source, context);
   let response = initial;
   const ctx = {
+    effect: fn => fn(),
+    locale: {
+      register(namespace, value) {
+        assert.equal(namespace, 'ricePatrol');
+        assert.deepEqual(Object.keys(value.zh).sort(), Object.keys(value.en).sort());
+        dictionaries = value;
+        return () => {dictionaries = undefined;};
+      },
+      bind(namespace) {
+        assert.equal(namespace, 'ricePatrol');
+        return (key, params) => {
+          const template = dictionaries[activeLocale][key];
+          assert.equal(typeof template, 'string', `Missing ${activeLocale} translation: ${key}`);
+          return template.replace(/\{(\w+)\}/g, (match, name) => String(params?.[name] ?? match));
+        };
+      }
+    },
     slots: {inject: (_name, fn) => fn(), register: (meta, component) => {
+      assert.equal(meta.locale, 'ricePatrol');
       if (meta.name === 'conversation.input.dock') Panel = component;
       else if (meta.name === 'plugins.bundle.config') SettingsPage = component;
       else assert.fail(`Unexpected slot ${meta.name}`);
@@ -67,6 +85,7 @@ function fixture(initial) {
     };
   };
   return {mount, Panel, SettingsPage, calls, opened, timers, settingsWrites,
+    setLocale(locale) {assert.ok(['zh', 'en'].includes(locale)); activeLocale = locale;},
     setResponse(value) {response = value;}, setSettingsSnapshot(value) {
       settingsSnapshot = value; for (const listener of settingsListeners) listener();
     }};
@@ -90,6 +109,12 @@ test('mode card offers three choices and saves only the selected mode in DSH set
   assert.equal(select.props.value, 'stop');
   assert.deepEqual(f.settingsWrites, [{field: 'mode', value: 'stop'}]);
   assert.ok(flatten(tree).some(x => typeof x === 'string' && x.includes('重启 DSH Web')));
+  f.setLocale('en');
+  tree = page.render();
+  assert.equal(tree.props['aria-label'], 'Rice Patrol settings');
+  assert.ok(flatten(tree).some(x => x === 'Response mode'));
+  assert.ok(flatten(tree).some(x => x === 'Stop: interrupt confirmed repetition'));
+  assert.ok(flatten(tree).some(x => typeof x === 'string' && x.includes('Restart DSH Web')));
   page.unmount();
 });
 
@@ -98,9 +123,14 @@ test('polls only sidecar RPC, one card per episode, stops exact session/episode,
   const panel = f.mount(f.Panel, {sessionId: 'parent-1'}); panel.render(); await tick();
   const tree = panel.render();
   const cardElement = tree.children[0];
-  const card = f.mount(cardElement.type, cardElement.props); const cardTree = card.render();
+  const card = f.mount(cardElement.type, cardElement.props); card.render();
+  f.setLocale('en');
+  const cardTree = card.render();
   const buttons = flatten(cardTree).filter(x => x?.type === 'button');
   assert.equal(buttons.length, 2);
+  assert.equal(buttons[0].children[0], 'View recovery session and result');
+  assert.equal(buttons[1].children[0], 'Stop recovery');
+  assert.ok(flatten(cardTree).some(x => x === 'Recovery requests 2'));
   buttons[0].props.onClick();
   assert.deepEqual(f.opened, [{childSessionId: 'child-1', parentSessionId: 'parent-1', mode: 'one-shot'}]);
   await buttons[1].props.onClick();
@@ -120,12 +150,30 @@ test('terminal state has a dismiss control, no stop control, and escapes text as
   assert.equal(buttons[0].children[0], '关闭提醒');
   assert.ok(flatten(tree).some(x => typeof x === 'string' && x.includes('<script>')));
   assert.ok(!flatten(tree).some(x => x?.props?.dangerouslySetInnerHTML));
+  f.setLocale('en');
+  const english = card.render();
+  assert.equal(english.props['aria-label'], 'Task recovery status');
+  assert.ok(flatten(english).some(x => x === 'Task recovery · Recovery did not complete'));
+  assert.equal(flatten(english).find(x => x?.type === 'button').children[0], 'Dismiss reminder');
   await buttons[0].props.onClick();
   assert.deepEqual(f.calls.at(-1).payload, {sessionId: 'parent-1', episodeId: 'episode-1'});
   assert.equal(f.calls.at(-1).endpoint, 'research-guard/dismiss');
   f.setResponse(ok([]));
   panel.render(); await tick();
   assert.equal(panel.render(), null);
+  card.unmount(); panel.unmount();
+});
+
+test('known recovery reasons translate with DSH locale, and unknown codes use a safe fallback', async () => {
+  const f = fixture(ok([episode('BLOCKED', {reason: 'EXTERNAL_TOOL_RECONCILIATION_REQUIRED'})]));
+  const panel = f.mount(f.Panel, {sessionId: 'parent-1'}); panel.render(); await tick();
+  const element = panel.render().children[0];
+  const card = f.mount(element.type, element.props);
+  assert.ok(flatten(card.render()).some(x => x === '原因：需要确认此前工具或后台任务的状态'));
+  f.setLocale('en');
+  assert.ok(flatten(card.render()).some(x => x === 'Reason: Check the status of earlier tools or background jobs'));
+  card.render({...element.props, data: episode('BLOCKED', {reason: 'NEW_UNRECOGNIZED_REASON'})});
+  assert.ok(flatten(card.render()).some(x => x === 'Reason: Recovery paused. Inspect the recovery session or contact the maintainer'));
   card.unmount(); panel.unmount();
 });
 
