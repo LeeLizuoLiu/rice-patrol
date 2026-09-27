@@ -10,6 +10,23 @@ const sha=text=>createHash('sha256').update(text).digest('hex');
 const isObject=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const positive=value=>Number.isSafeInteger(value)&&value>0;
 const identity=value=>typeof value==='string'&&value.length>0&&value.length<=512;
+const IMAGE_TYPES=new Set(['image/png','image/jpeg','image/webp','image/gif']);
+function handoffImage(block,eventId,contentIndex){
+  const ref=block?.attachment;
+  if(!isObject(ref)||!identity(ref.attachmentId)||!IMAGE_TYPES.has(ref.mediaType)||
+    !positive(ref.bytes)||!positive(ref.width)||!positive(ref.height)||
+    (ref.name!==undefined&&(typeof ref.name!=='string'||ref.name.length>512))||
+    (block.offloaded!==undefined&&block.offloaded!==true)||
+    Object.keys(block).some(key=>!['type','attachment','offloaded'].includes(key))||
+    Object.keys(ref).some(key=>!['attachmentId','mediaType','bytes','width','height','name','originalDimensions'].includes(key))||
+    (ref.originalDimensions!==undefined&&(!isObject(ref.originalDimensions)||
+      !positive(ref.originalDimensions.width)||!positive(ref.originalDimensions.height))))fail('UNSUPPORTED_USER_CONTENT');
+  const attachment={attachmentId:ref.attachmentId,mediaType:ref.mediaType,bytes:ref.bytes,
+    width:ref.width,height:ref.height,
+    ...(ref.name===undefined?{}:{name:ref.name}),
+    ...(ref.originalDimensions===undefined?{}:{originalDimensions:{...ref.originalDimensions}})};
+  return {eventId,contentIndex,block:{type:'image',attachment,...(block.offloaded?{offloaded:true}:{})}};
+}
 
 // Canonicalization both makes fingerprints stable and refuses unsupported data.
 // Bounds apply before allocating a complete serialization of an untrusted result.
@@ -67,11 +84,11 @@ const SKIPPABLE=new Set([
  * reconciled live external jobs. Logged brackets independently reject unfinished
  * work. Events are the complete immutable log, not a provider transcript.
  *
- * Supports text-only explicit user input and append-only native/nested PTC tool
+ * Supports text and durable image references in explicit user input, and native/nested PTC tool
  * records. Complete compaction brackets are validated against the historical
  * surface while original user/tool events remain authoritative. Their generated
  * summaries are never copied. Other rewrites, unknown required events,
- * multimodal input and repaired/unpaired tool records require reconciliation.
+ * unsupported multimodal input and repaired/unpaired tool records require reconciliation.
  */
 function construct(events,{
   sessionId,modelKey,guardEpisodeId,turnSettled=false,toolsSettled=false,
@@ -85,13 +102,13 @@ function construct(events,{
   if(!identity(sessionId)||(!ledgerOnly&&(!identity(modelKey)||!identity(guardEpisodeId))))fail('CHECKPOINT_IDENTITY_REQUIRED');
   if(!ledgerOnly&&(turnSettled!==true||toolsSettled!==true))fail('STOP_NOT_SETTLED');
   if(!Array.isArray(events)||!events.length||events.length>maxEvents)fail('CHECKPOINT_EVENT_LIMIT');
-  const users=[],operations=[],recentOperations=[],operationKeys=new Set(),sideEffectKeys=new Set(),evidence=[],assistantProgress=[],native=new Map(),ptc=new Map();
+  const users=[],handoffImages=[],operations=[],recentOperations=[],operationKeys=new Set(),sideEffectKeys=new Set(),evidence=[],assistantProgress=[],native=new Map(),ptc=new Map();
   const surface=[],compactions=[],todoSnapshots=[],compactionIds=new Set(),commands=new Map();
   let systemSurfaceSeq;
   let compaction=null;
   const inbox={'next-turn':[],'next-step':[]};
   const seenMessageIds=new Set();
-  let lastSeq=-1,openTurn=null,openStep=null,lastTurn=0,lastStep=0,userChars=0,totalContentChars=0,operationCount=0;
+  let lastSeq=-1,openTurn=null,openStep=null,lastTurn=0,lastStep=0,userChars=0,userImageBytes=0,totalContentChars=0,operationCount=0;
   const eventId=event=>`${sessionId}#${event.seq}`;
   const inStep=data=>{
     if(openTurn===null||openStep===null||data.turn!==openTurn||data.step!==openStep)fail('TOOL_SCOPE_MISMATCH');
@@ -243,14 +260,25 @@ function construct(events,{
     }else if(event.type==='user/message'){
       if(data.source?.kind!=='user')continue;
       if(data.role!=='user'||!identity(data.id)||seenMessageIds.has(data.id)||!Array.isArray(data.content)||!data.content.length)fail('INVALID_USER_MESSAGE');
-      // Unsupported blocks cannot be silently discarded: a file/image can hold
-      // a critical correction that a text-only checkpoint would otherwise lose.
-      if(data.content.some(block=>block?.type!=='text'||typeof block.text!=='string'))fail('UNSUPPORTED_USER_CONTENT');
-      const content=data.content.map(block=>({type:'text',text:block.text}));
+      // Image references are immutable host attachments. Preserve them as
+      // structured child prompt blocks, never turn their bytes into a summary.
+      // Files and unknown blocks still pause recovery rather than disappear.
+      const images=[];
+      data.content.forEach((block,index)=>{
+        if(block?.type==='image'){
+          const image=handoffImage(block,eventId(event),index);
+          userImageBytes+=image.block.attachment.bytes;
+          if(handoffImages.length>=16||userImageBytes>32_000_000)fail('USER_IMAGE_LIMIT');
+          handoffImages.push(image);
+          images.push({contentIndex:index,attachmentId:image.block.attachment.attachmentId,
+            mediaType:image.block.attachment.mediaType,bytes:image.block.attachment.bytes});
+        }else if(block?.type!=='text'||typeof block.text!=='string')fail('UNSUPPORTED_USER_CONTENT');
+      });
+      const content=data.content.filter(block=>block.type==='text').map(block=>({type:'text',text:block.text}));
       const text=content.map(block=>block.text).join('\n');
       userChars+=text.length;
       if(userChars>maxUserChars)fail('USER_INSTRUCTIONS_TOO_LARGE');
-      users.push({eventId:eventId(event),messageId:data.id,text});
+      users.push({eventId:eventId(event),messageId:data.id,text,...(images.length?{images}:{})});
       seenMessageIds.add(data.id);
     }else if(event.type==='assistant/message'){
       // Visible, completed text can help a fresh Agent find its place. Never
@@ -323,7 +351,7 @@ function construct(events,{
     completedSideEffectKeys:[...sideEffectKeys],toolsSettled:true,
     turnClosed:openTurn===null&&openStep===null,sourceEventCount:events.length,
     historicalCompactionCount:compactions.length,todoSnapshotCount:todoSnapshots.length};
-  if(!users.length||!users.some(user=>user.text.trim()))fail('USER_TASK_UNAVAILABLE');
+  if(!users.length||!users.some(user=>user.text.trim()||user.images?.length))fail('USER_TASK_UNAVAILABLE');
   const promptOperations=recentHistory?recentOperations.slice(-16):operations;
   const operationLedger=recentHistory?{count:operationCount,uniqueCount:completedOperationKeys.length,
     sha256:sha(canonical(completedOperationKeys,{maxChars:maxContentChars}))}:undefined;
@@ -360,7 +388,7 @@ function construct(events,{
   const text=canonical(payload,{maxChars:maxContentChars});
   if(text.length>maxCleanInputChars)fail('CLEAN_INPUT_TOO_LARGE');
   return {modelKey,excludedGuardTail:true,provenance:'deterministic-clean',sourceEpisodeId:guardEpisodeId,
-    text,mandatoryFacts,completedOperationKeys,completedSideEffectKeys:[...sideEffectKeys],taskFingerprint:sha(serializedFacts),
+    text,mandatoryFacts,handoffImages,completedOperationKeys,completedSideEffectKeys:[...sideEffectKeys],taskFingerprint:sha(serializedFacts),
     reasoningIncluded:false,toolStateKnown:true,sourceEventCount:events.length};
 }
 

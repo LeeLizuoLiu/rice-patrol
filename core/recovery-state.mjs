@@ -27,7 +27,7 @@ function mandatorySuffix(facts, completedKeys) {
       facts.constraints?.source !== 'explicit-user-messages-preserved-verbatim')
     throw new RecoveryStopped('MANDATORY_FACTS_MISSING');
   if (facts.userMessages.some(item => typeof item?.eventId !== 'string' ||
-      typeof item?.text !== 'string' || !item.text))
+      typeof item?.text !== 'string' || (!item.text && !item.images?.length)))
     throw new RecoveryStopped('MANDATORY_FACTS_INVALID');
   const operationKeys = facts.completedOperations.map(item => {
     if (!['result-recorded','error-recorded'].includes(item?.status) || typeof item.operationKey !== 'string' ||
@@ -66,6 +66,24 @@ function mandatorySuffix(facts, completedKeys) {
   if (!serialized || JSON.parse(serialized).userMessages.length !== facts.userMessages.length)
     throw new RecoveryStopped('MANDATORY_FACTS_INVALID');
   return `\n\n<mandatory-facts>\n${serialized}\n</mandatory-facts>`;
+}
+
+function verifiedHandoffImages(facts, images) {
+  if(facts.userMessages.some(message=>message.images!==undefined&&!Array.isArray(message.images)))
+    throw new RecoveryStopped('USER_IMAGE_HANDOFF_MISMATCH');
+  const expected=facts.userMessages.flatMap(message=>(message.images??[]).map(image=>({
+    eventId:message.eventId,...image
+  })));
+  if(!Array.isArray(images)||images.length!==expected.length||images.length>16)
+    throw new RecoveryStopped('USER_IMAGE_HANDOFF_MISMATCH');
+  for(let index=0;index<images.length;index++){
+    const actual=images[index],required=expected[index],ref=actual?.block?.attachment;
+    if(actual?.eventId!==required.eventId||actual?.contentIndex!==required.contentIndex||
+      actual?.block?.type!=='image'||ref?.attachmentId!==required.attachmentId||
+      ref?.mediaType!==required.mediaType||ref?.bytes!==required.bytes)
+      throw new RecoveryStopped('USER_IMAGE_HANDOFF_MISMATCH');
+  }
+  return images;
 }
 
 function withBudget(task, parentController, ms, label) {
@@ -188,6 +206,7 @@ export class BoundedRecovery {
           checkpoint.text.length > this.maxCleanInputChars)
         throw new RecoveryStopped('INVALID_CHECKPOINT');
       const suffix = mandatorySuffix(checkpoint.mandatoryFacts, completedOperationKeys);
+      const handoffImages=verifiedHandoffImages(checkpoint.mandatoryFacts,checkpoint.handoffImages??[]);
       if (suffix.length >= this.maxCheckpointChars)
         throw new RecoveryStopped('MANDATORY_FACTS_TOO_LARGE');
       if (this.alwaysCompact || checkpoint.text.length > this.compactAboveChars) {
@@ -237,7 +256,7 @@ export class BoundedRecovery {
       };
       const result = await withBudget(signal => adapter.resume({
         taskId, modelKey, guardEpisodeId, checkpoint: finalCheckpoint,
-        mandatoryFacts: checkpoint.mandatoryFacts, signal, gate,
+        mandatoryFacts: checkpoint.mandatoryFacts, handoffImages, signal, gate,
         completedOperationKeys: [...completedOperationKeys],
         maxRequests: this.maxResumeRequests
       }), controller, this.resumeTimeoutMs, 'resume');

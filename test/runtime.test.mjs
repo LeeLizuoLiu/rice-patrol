@@ -21,11 +21,11 @@ async function until(predicate,ms=5000){
   throw Error('Synthetic scenario exceeded its finite deadline');
 }
 
-async function runScenario(scenario,{routes=[routeA],settings={},plain=false,initialRoute}={}){
+async function runScenario(scenario,{routes=[routeA],settings={},plain=false,initialRoute,image=false}={}){
   const hostRuntime=await createHost(),{ctx,events}=hostRuntime;
   const directory=await mkdtemp(join(tmpdir(),'dsh-generic-runtime-'));
   const fibers=[],parents=[],responses=new Set(),rpcHandlers=new Map();
-  const stats={requests:[],counter:0,record:0,errors:[],children:[],prepared:[],streams:[],closes:[],releaseIgnored:[]};
+  const stats={requests:[],counter:0,record:0,errors:[],children:[],prepared:[],streams:[],closes:[],releaseIgnored:[],imageReads:0};
   const rpc=async(endpoint,payload)=>{
     const handler=rpcHandlers.get(`/api/${endpoint}`);assert.ok(handler,'dedicated guard route must be registered');
     const rpcId='synthetic-rpc';
@@ -83,6 +83,17 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
     for(const provider of new Set(routes.map(route=>route.provider)))
       ctx.llm.registerAdapter([provider],new SyntheticHttpAdapter(origin,stats,{ignoreCancellation:scenario==='ignores-abort'}));
     const {Service}=await host('@deepseek-ai/cordis');
+    if(image){
+      class FakeAttachments extends Service{
+        constructor(context){super(context,'attachments')}
+        async readImage(ref){
+          assert.equal(ref.attachmentId,`sha256:${'c'.repeat(64)}`);
+          stats.imageReads++;
+          return {ref,data:new Uint8Array(4)};
+        }
+      }
+      fibers.push(await ctx.plugin(FakeAttachments));
+    }
     class FakeConnection extends Service {
       constructor(context){
         super(context,'connection');
@@ -120,7 +131,9 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
       const parent=await ctx.agents.create({sessionId:`generic-runtime-${scenario}-${root}`,agentOptions:initialRoute??route});
       parents.push(parent);
       parent.agent.followup(createUserMessage({content:[{type:'text',text:
-        `SYNTHETIC_TASK_${root}: Complete one synthetic recorded operation. Keep the existing counter unchanged after its first execution.`}],source:{kind:'user'}}));
+        `SYNTHETIC_TASK_${root}: Complete one synthetic recorded operation. Keep the existing counter unchanged after its first execution.`},
+        ...(image?[{type:'image',attachment:{attachmentId:`sha256:${'c'.repeat(64)}`,
+          mediaType:'image/png',bytes:4,width:1,height:1}}]:[])],source:{kind:'user'}}));
     }
     let stopAccepted=false,lastStatuses=[];
     const statuses=plain?[]:await until(async()=>{
@@ -200,6 +213,17 @@ test('generic public API: AgentLoop cancels upstream and fresh same-route child 
   assert.equal(result.stats.record,1);assert.equal(result.stats.children.length,1);
   assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','compact','child','child']);
   assert.equal(endOf(result.childEvents[0])?.kind,'completed');
+});
+
+test('generic public API: recovery compacts text and passes a verified user image to one child',{timeout:10000},async()=>{
+  const result=await runScenario('normal',{image:true});
+  assert.equal(result.status.state,'COMPLETED',JSON.stringify(result.status));
+  assert.equal(result.stats.imageReads,2);
+  const compact=result.stats.requests.find(request=>request.kind==='compact');
+  const child=result.stats.requests.find(request=>request.kind==='child');
+  assert.ok(!JSON.stringify(compact.payload.messages).includes('"type":"image"'));
+  assert.ok(JSON.stringify(child.payload.messages).includes('"type":"image"'));
+  assert.equal(result.stats.children.length,1);
 });
 
 test('generic public API: duplicate child side effect does not execute twice',{timeout:10000},async()=>{

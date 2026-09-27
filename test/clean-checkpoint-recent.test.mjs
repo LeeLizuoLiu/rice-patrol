@@ -49,6 +49,31 @@ test('settled tool errors remain recorded as uncertain work instead of blocking 
   assert.ok(checkpoint.completedSideEffectKeys.includes(keys[1]));
 });
 
+test('clean checkpoint preserves a user image by durable reference without copying interrupted reasoning',()=>{
+  const ref={attachmentId:`sha256:${'a'.repeat(64)}`,mediaType:'image/png',bytes:128,width:8,height:8,name:'diagram.png'};
+  const events=[
+    {seq:0,type:'turn/start',data:{turn:1}},
+    {seq:1,type:'user/message',surfaceOp:'append',data:{role:'user',id:'image-user',source:{kind:'user'},
+      content:[{type:'text',text:'Inspect the diagram.'},{type:'image',attachment:ref}]}},
+    {seq:2,type:'step/start',data:{turn:1,step:1}},
+    {seq:3,type:'assistant/message',surfaceOp:'append',data:{message:{content:[{type:'reasoning',text:'SINGING_SECRET'}]},interrupted:true}},
+    {seq:4,type:'step/end',data:{turn:1,step:1}},
+    {seq:5,type:'turn/end',data:{turn:1,reason:{kind:'aborted'}}}
+  ];
+  const opts={sessionId:'image-session',modelKey:'synthetic/model',guardEpisodeId:'image-episode',
+    turnSettled:true,toolsSettled:true,recentHistory:true};
+  const checkpoint=buildCleanCheckpoint(events,opts);
+  assert.equal(checkpoint.handoffImages.length,1);
+  assert.deepEqual(checkpoint.handoffImages[0],{eventId:'image-session#1',contentIndex:1,
+    block:{type:'image',attachment:ref}});
+  assert.deepEqual(checkpoint.mandatoryFacts.userMessages[0].images,
+    [{contentIndex:1,attachmentId:ref.attachmentId,mediaType:ref.mediaType,bytes:ref.bytes}]);
+  assert.ok(!checkpoint.text.includes('SINGING_SECRET'));
+  assert.ok(!checkpoint.text.includes('diagram.png'));
+  const bad=structuredClone(events);delete bad[1].data.content[1].attachment.attachmentId;
+  assert.throws(()=>buildCleanCheckpoint(bad,opts),error=>error.code==='UNSUPPORTED_USER_CONTENT');
+});
+
 test('many validated historical compactions use a bounded provenance ledger in the handoff',()=>{
   const events=[];let seq=0;
   const append=(type,data,extra={})=>{const event={seq:++seq,type,data,...extra};events.push(event);return event};
