@@ -71,7 +71,7 @@ window.__ModuleLoader__.load({
       const [pending, setPending] = useState(false);
       const [notice, setNotice] = useState('');
       useEffect(() => scope.subscribe(() => setSnapshot(scope.getSnapshot())), [scope]);
-      const mode = ['observe', 'stop', 'recover'].includes(snapshot.value?.mode) ? snapshot.value.mode : 'observe';
+      const mode = ['observe', 'stop', 'recover'].includes(snapshot.value?.mode) ? snapshot.value.mode : 'stop';
       async function choose(event) {
         const next = event.target.value;
         if (!['observe', 'stop', 'recover'].includes(next) || pending || next === mode) return;

@@ -1,5 +1,5 @@
-# UI enablement starts observe mode. Its state directory defaults beneath
-# DSH_HOME (or ~/.dsh); stop/recover still require an explicit mode choice.
+# UI enablement starts stop mode. Its state directory defaults beneath
+# DSH_HOME (or ~/.dsh); the Web settings card can select observe or recover.
 - insert:
     - id: rice-patrol
       name: dsh-rice-patrol

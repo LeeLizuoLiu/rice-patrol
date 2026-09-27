@@ -13,8 +13,8 @@ test('persisted active status becomes a blocked restart, never an automatic reco
  await first.set('private-session',{episodeId:'e1',state:'COMPLETED',childSessionId:'c1'});
  assert.equal((await restored.get('private-session')).state,'COMPLETED');}finally{await rm(dir,{recursive:true,force:true})}
 });
-test('default observe has no new request deadline; recovery tool and call limits reject broadening',()=>{
- const cfg=validateSettings({stateDirectory:'/tmp/example'});assert.equal(cfg.mode,'observe');assert.equal(cfg.requestDeadlineMs,undefined);
+test('default stop has no new request deadline; recovery tool and call limits reject broadening',()=>{
+ const cfg=validateSettings({stateDirectory:'/tmp/example'});assert.equal(cfg.mode,'stop');assert.equal(cfg.requestDeadlineMs,undefined);
  assert.throws(()=>validateSettings({stateDirectory:'/tmp/example',recoveryTools:['shell']}));
  assert.throws(()=>validateSettings({stateDirectory:'/tmp/example',maxResumeRequests:100}));
 });

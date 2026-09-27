@@ -17,7 +17,7 @@ import {registerGuardRpc} from './web-rpc.mjs';
 import {validateSettings} from './settings.mjs';
 export const name='dsh-rice-patrol';
 export const inject=['llm','tools','agents','subagents','connection','settings'];
-const ModeSettings=z.object({mode:z.string().default('observe')});
+const ModeSettings=z.object({mode:z.string().default('stop')});
 const endReason=agent=>agent.session.log.filter(e=>e.type==='turn/end').at(-1)?.data?.reason;
 const guardEnded=agent=>endReason(agent)?.reason?.reason==='reasoning-guard:REASONING_LOOP_CONFIRMED';
 const noInbox=agent=>!agent.inbox.nextTurn.length&&!agent.inbox.nextStep.length;
