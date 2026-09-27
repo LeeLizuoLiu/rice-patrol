@@ -87,7 +87,7 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
       constructor(context){
         super(context,'connection');
         this.fetch={register(route){
-          assert.ok(['/api/research-guard/status','/api/research-guard/stop'].includes(route.path));
+          assert.ok(['/api/research-guard/status','/api/research-guard/stop','/api/research-guard/dismiss'].includes(route.path));
           assert.deepEqual(route.methods,['POST']);assert.equal(route.requestBody,'buffered');
           assert.ok(!rpcHandlers.has(route.path),'route handler is unique');
           rpcHandlers.set(route.path,route.fetch);return ()=>rpcHandlers.delete(route.path);
@@ -113,7 +113,7 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
       const {reasoningEffort,...rest}=original;
       return {...rest,...routes[0]};
     });
-    assert.equal(rpcHandlers.size,2);
+    assert.equal(rpcHandlers.size,3);
     assert.equal((await rpc('research-guard/status',{})).error.code,'gateway/bad-request');
     const {createUserMessage}=await host('@deepseek-ai/dsh-llm');
     for(const [root,route] of routes.entries()){
@@ -171,6 +171,16 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
     }
     assert.deepEqual(stats.errors,[],'no adapter, route, or AgentLoop errors');
     assert.ok(stats.prepared.length>=stats.requests.length,'requests pass the public prepareCall contract');
+    if(!plain){
+      for(const [index,parent] of parents.entries()){
+        const sessionId=parent.agent.session.id,episodeId=statuses[index].episodeId;
+        const wrong=await rpc('research-guard/dismiss',{sessionId,episodeId:'other-episode'});
+        assert.deepEqual(wrong,{ok:true,value:{dismissed:false}});
+        const dismissed=await rpc('research-guard/dismiss',{sessionId,episodeId});
+        assert.deepEqual(dismissed,{ok:true,value:{dismissed:true}});
+        assert.deepEqual((await rpc('research-guard/status',{sessionId})).value.episodes,[]);
+      }
+    }
     return {stats,status:statuses[0],statuses,parentEvents:parentEvents[0],allParentEvents:parentEvents,childEvents,stopAccepted};
   }finally{
     await plugin?.dispose();

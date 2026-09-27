@@ -36,7 +36,7 @@ Start DSH with `dsh web --patch /absolute/path/to/rice-patrol.yml` if you use an
 - In `stop` or `recover`, cancels the DSH turn. Recovery starts only after the turn settles and the source stream confirms cleanup. An adapter that does not finish cleanup causes recovery to stop.
 - Reconstructs a clean checkpoint from explicit user messages and settled tool results; it excludes the looping reasoning tail. The handoff keeps a rolling window of the latest 128 operations. Older operations leave that window, while their exact fingerprints remain in a separate replay guard.
 - In `recover`, makes one bounded same-model compaction call, then starts at most one fresh child Agent with the actual provider, model, and effort. Models without effort keep that field unset. The child uses tools allowed by the host. A durable operation journal blocks exact duplicate side effects.
-- Shows status, a stop control, and the child result link in DSH Web.
+- Shows status, a stop control during active recovery, a dismiss button for finished or blocked reminders, and the child result link in DSH Web. Dismissing a reminder keeps its status record and does not hide later episodes.
 
 The default is `stop`. Immediate stopping at confirmation has not been shown safe for all real tasks: earlier traces included legitimate tool handoffs shortly after confirmation. Select `observe` if you want to collect evidence without interrupting tasks. The plugin currently reads only exposed reasoning chunks; it cannot detect a model's hidden reasoning or repetition confined to visible answer text. Cancelling a local stream does not prove the remote provider stopped billing.
 
@@ -44,6 +44,6 @@ Recover can reconcile settled shell/PTC tool history and tool errors without tre
 
 ## Development and evidence
 
-`npm test` runs the local suite when the matching DSH packages are available. The current changes passed **50 local tests** and a read-only checkpoint/compaction dry-run against one previously saved long session, with no new model calls. The earlier release passed an isolated DSH Web flow with two synthetic providers; that Web run predates this recovery update. See [current validation](docs/RECOVERY_0_2_VALIDATION.md) and [earlier Web validation](docs/VALIDATION.md).
+`npm test` runs the local suite when the matching DSH packages are available. v0.2.1 passed **51 local tests**, including the dismiss UI, durable state, and synthetic RPC flow, with no new real model calls. An earlier update passed a read-only checkpoint/compaction dry-run against one saved long session. An earlier release passed an isolated DSH Web flow with two synthetic providers; v0.2.1 has not repeated that full Web check. See [recovery validation](docs/RECOVERY_0_2_VALIDATION.md) and [earlier Web validation](docs/VALIDATION.md).
 
 This repository intentionally excludes private sessions, credentials, research project files, and old replay traces. The package uses the MIT license.

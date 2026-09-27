@@ -3,7 +3,7 @@
 export function registerGuardRpc(ctx,handler){
   const offs=[];
   try{
-    for(const endpoint of ['research-guard/status','research-guard/stop']){
+    for(const endpoint of ['research-guard/status','research-guard/stop','research-guard/dismiss']){
       offs.push(ctx.connection.fetch.register({path:`/api/${endpoint}`,methods:['POST'],requestBody:'buffered',
         fetch:async request=>{
           if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return new Response('JSON required',{status:415});

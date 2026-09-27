@@ -105,10 +105,10 @@ window.__ModuleLoader__.load({
         const [pending, setPending] = useState(false);
         const [notice, setNotice] = useState('');
         const alive = useRef(true);
-        const stopRequest = useRef(null);
+        const actionRequest = useRef(null);
         useEffect(() => {
           alive.current = true;
-          return () => { alive.current = false; stopRequest.current?.abort(); };
+          return () => { alive.current = false; actionRequest.current?.abort(); };
         }, []);
         useEffect(() => { setNotice(''); }, [data.state]);
         const active = ACTIVE.has(data.state);
@@ -116,7 +116,7 @@ window.__ModuleLoader__.load({
           if (pending || !active) return;
           setPending(true); setNotice('');
           const controller = new AbortController();
-          stopRequest.current = controller;
+          actionRequest.current = controller;
           const timeout = setTimeout(() => controller.abort(), 5000);
           try {
             const response = await ctx.connection.rpc.call('/api', 'research-guard/stop',
@@ -130,7 +130,27 @@ window.__ModuleLoader__.load({
             if (alive.current) setNotice('连接未完成，请检查连接后重试。');
           } finally {
             clearTimeout(timeout);
-            if (stopRequest.current === controller) stopRequest.current = null;
+            if (actionRequest.current === controller) actionRequest.current = null;
+            if (alive.current) setPending(false);
+          }
+        }
+        async function dismiss() {
+          if (pending || active) return;
+          setPending(true); setNotice('');
+          const controller = new AbortController();
+          actionRequest.current = controller;
+          const timeout = setTimeout(() => controller.abort(), 5000);
+          try {
+            const response = await ctx.connection.rpc.call('/api', 'research-guard/dismiss',
+              {sessionId, episodeId: data.episodeId}, controller.signal);
+            if (!alive.current) return;
+            if (response?.ok && response.value?.dismissed === true) refresh();
+            else setNotice('暂时无法关闭提醒，请刷新后重试。');
+          } catch {
+            if (alive.current) setNotice('连接未完成，请检查连接后重试。');
+          } finally {
+            clearTimeout(timeout);
+            if (actionRequest.current === controller) actionRequest.current = null;
             if (alive.current) setPending(false);
           }
         }
@@ -146,6 +166,8 @@ window.__ModuleLoader__.load({
             parentSessionId: sessionId, mode: 'one-shot'})}, '查看恢复会话与结果'));
         if (active) actions.push(h('button', {key: 'stop', type: 'button', disabled: pending,
           style: style.button, onClick: stop}, pending ? '正在请求停止…' : '停止恢复'));
+        else actions.push(h('button', {key: 'dismiss', type: 'button', disabled: pending,
+          style: style.button, onClick: dismiss}, pending ? '正在关闭…' : '关闭提醒'));
         if (actions.length) children.push(h('div', {key: 'actions', style: style.actions}, actions));
         if (notice) children.push(h('div', {key: 'notice', role: 'status', style: style.text}, notice));
         return h('section', {'aria-label': '任务恢复状态', 'data-research-guard-episode': data.episodeId,

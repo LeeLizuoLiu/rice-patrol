@@ -104,10 +104,15 @@ export async function installRuntime(ctx,raw){
   }));
   offs.push(registerGuardRpc(ctx,
     async(endpoint,payload)=>{
-      if(!['research-guard/status','research-guard/stop'].includes(endpoint))return {ok:false,error:{code:'gateway/not-found',message:'Unknown endpoint',details:{}}};
+      if(!['research-guard/status','research-guard/stop','research-guard/dismiss'].includes(endpoint))return {ok:false,error:{code:'gateway/not-found',message:'Unknown endpoint',details:{}}};
       if(typeof payload?.sessionId!=='string'||!payload.sessionId||payload.sessionId.length>256)
         return {ok:false,error:{code:'gateway/bad-request',message:'Invalid session',details:{}}};
-      if(endpoint==='research-guard/status'){let latest=await status.get(payload.sessionId);const live=active.has(payload.sessionId)&&recovery.status(payload.sessionId);if(latest&&live)latest={...latest,requests:live.resumeRequests,compactCalls:live.compactCalls};return {ok:true,value:{schema:1,episodes:latest?[latest]:[]}}}
+      if(endpoint==='research-guard/status'){let latest=await status.get(payload.sessionId);const live=active.has(payload.sessionId)&&recovery.status(payload.sessionId);if(latest?.dismissed)latest=null;if(latest&&live)latest={...latest,requests:live.resumeRequests,compactCalls:live.compactCalls};return {ok:true,value:{schema:1,episodes:latest?[latest]:[]}}}
+      if(endpoint==='research-guard/dismiss'){
+        if(typeof payload.episodeId!=='string'||!payload.episodeId||payload.episodeId.length>180)
+          return {ok:false,error:{code:'gateway/bad-request',message:'Invalid episode',details:{}}};
+        return {ok:true,value:{dismissed:await status.dismiss(payload.sessionId,payload.episodeId)}};
+      }
       const record=active.get(payload.sessionId);
       const accepted=!!record&&record.episodeId===payload.episodeId&&activeStates.has(record.state);
       if(accepted)interrupt(record);

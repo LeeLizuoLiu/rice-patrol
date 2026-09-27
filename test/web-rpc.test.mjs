@@ -17,11 +17,12 @@ const envelope=payload=>JSON.stringify({type:'client-request',rpcId:'synthetic-r
 test('guard routes reject malformed, mismatched and oversized inputs before invoking their handler',async()=>{
   let calls=0;const fixture=setup(async()=>{calls++;return {ok:true,value:null}});
   try{
-    assert.equal(fixture.routes.size,2);
+    assert.equal(fixture.routes.size,3);
     assert.equal((await fixture.request('{')).status,400);
     assert.equal((await fixture.request('x'.repeat(8193))).status,413);
     assert.equal((await fixture.request(envelope({}),{contentType:'text/plain'})).status,415);
     assert.equal((await fixture.request(envelope({}),{path:'/api/research-guard/stop'})).status,400);
+    assert.equal((await fixture.request(envelope({}),{path:'/api/research-guard/dismiss'})).status,400);
     assert.equal((await fixture.request(JSON.stringify({type:'server-response',rpcId:'a',method:'research-guard/status'}))).status,400);
     assert.equal(calls,0);
   }finally{await fixture.off()}

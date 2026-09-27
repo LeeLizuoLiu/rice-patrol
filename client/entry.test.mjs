@@ -51,7 +51,8 @@ function fixture(initial) {
     }}},
     connection: {rpc: {async call(channel, endpoint, payload, signal) {
       calls.push({channel, endpoint, payload: JSON.parse(JSON.stringify(payload)), signal});
-      return endpoint === 'research-guard/status' ? response : {ok: true, value: {accepted: true}};
+      return endpoint === 'research-guard/status' ? response : endpoint === 'research-guard/dismiss'
+        ? {ok: true, value: {dismissed: true}} : {ok: true, value: {accepted: true}};
     }}},
     uiWorkspace: {openSession: address => opened.push(JSON.parse(JSON.stringify(address)))}
   };
@@ -109,14 +110,22 @@ test('polls only sidecar RPC, one card per episode, stops exact session/episode,
   card.unmount(); panel.unmount(); assert.equal(f.timers.size, 0);
 });
 
-test('terminal state has no stop control and escapes text as React content', async () => {
+test('terminal state has a dismiss control, no stop control, and escapes text as React content', async () => {
   const f = fixture(ok([episode('FAILED', {reason: '<script>not-executed</script>'})]));
   const panel = f.mount(f.Panel, {sessionId: 'parent-1'}); panel.render(); await tick();
   const element = panel.render().children[0];
   const card = f.mount(element.type, element.props); const tree = card.render();
-  assert.equal(flatten(tree).filter(x => x?.type === 'button').length, 0);
+  const buttons = flatten(tree).filter(x => x?.type === 'button');
+  assert.equal(buttons.length, 1);
+  assert.equal(buttons[0].children[0], '关闭提醒');
   assert.ok(flatten(tree).some(x => typeof x === 'string' && x.includes('<script>')));
   assert.ok(!flatten(tree).some(x => x?.props?.dangerouslySetInnerHTML));
+  await buttons[0].props.onClick();
+  assert.deepEqual(f.calls.at(-1).payload, {sessionId: 'parent-1', episodeId: 'episode-1'});
+  assert.equal(f.calls.at(-1).endpoint, 'research-guard/dismiss');
+  f.setResponse(ok([]));
+  panel.render(); await tick();
+  assert.equal(panel.render(), null);
   card.unmount(); panel.unmount();
 });
 
