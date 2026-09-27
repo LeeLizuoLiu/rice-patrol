@@ -12,7 +12,7 @@ Requires DeepSeek Harness `0.1.6-alpha.2` (the tested version) and a working `ds
 dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol
 ```
 
-The GitHub package contains ready-to-run `.mjs` files and needs no build step. After installation, check the `web` profile's package/bundle registration and restart DSH Web. Installing the package does not itself turn on the guard: its Cordis entry is disabled by default. See `config/observe.example.yml` and `config/recover.example.yml` for overlays.
+The GitHub package contains ready-to-run `.mjs` files and needs no build step. After installation, check the `web` profile's package/bundle registration and restart DSH Web. Installing the package does not itself turn on the guard: its Cordis entry is disabled by default. Enable both the package and its component on the DSH **Plugins** page. Once running, open **Plugins → rice-patrol** and select **observe**, **stop**, or **recover** in its settings card. The choice is saved in DSH settings and takes effect after restarting DSH Web; an in-flight task keeps its original mode. See `config/observe.example.yml` and `config/recover.example.yml` for optional profile overlays and recovery limits.
 
 Use an **absolute** `stateDirectory` path that DSH can write. For example, save this overlay outside the repository as `rice-patrol.yml`, replacing the directory with your own:
 
@@ -26,7 +26,7 @@ Use an **absolute** `stateDirectory` path that DSH can write. For example, save 
     stateDirectory: /absolute/path/to/rice-patrol-state
 ```
 
-Start DSH with `dsh web --patch /absolute/path/to/rice-patrol.yml`. `observe` records signals without cancelling a model request. You may omit `stateDirectory`; it defaults to `rice-patrol-state` below `DSH_HOME` (or `~/.dsh`). To use the bounded recovery prototype, change `mode` to `recover` and review the limits in `config/recover.example.yml`. You can instead choose `stop` to cancel without recovery. Remove the overlay and restart to disable it.
+Start DSH with `dsh web --patch /absolute/path/to/rice-patrol.yml` if you use an external overlay. `observe` records signals without cancelling a model request. You may omit `stateDirectory`; it defaults to `rice-patrol-state` below `DSH_HOME` (or `~/.dsh`). The Web settings choice overrides the overlay's `mode` on the next restart. `stop` cancels without recovery; `recover` enables the bounded recovery prototype. Remove the overlay and restart to disable a configuration supplied only by that overlay.
 
 ## What the guard does
 

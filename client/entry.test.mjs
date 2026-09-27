@@ -6,7 +6,9 @@ import vm from 'node:vm';
 const source = await readFile(new URL('./entry.mjs', import.meta.url), 'utf8');
 function fixture(initial) {
   const calls = [], opened = [], timers = new Map();
-  let current, bundle, Panel, nextTimer = 0;
+  let current, bundle, Panel, SettingsPage, nextTimer = 0;
+  let settingsSnapshot = {status: 'ready', writable: true, value: {mode: 'recover'}};
+  const settingsListeners = new Set(), settingsWrites = [];
   const React = {
     createElement: (type, props, ...children) => ({type, props: props ?? {}, children}),
     useState(value) {
@@ -33,7 +35,20 @@ function fixture(initial) {
   vm.runInNewContext(source, context);
   let response = initial;
   const ctx = {
-    slots: {inject: (_name, fn) => fn(), register: (meta, component) => {assert.equal(meta.name, 'conversation.input.dock'); Panel = component;}},
+    slots: {inject: (_name, fn) => fn(), register: (meta, component) => {
+      if (meta.name === 'conversation.input.dock') Panel = component;
+      else if (meta.name === 'plugins.bundle.config') SettingsPage = component;
+      else assert.fail(`Unexpected slot ${meta.name}`);
+    }},
+    settingsScope: {bind: ({namespace}) => {assert.equal(namespace, 'rice-patrol'); return {
+      getSnapshot: () => settingsSnapshot,
+      subscribe: fn => {settingsListeners.add(fn); return () => settingsListeners.delete(fn)},
+      async set(field, value) {
+        settingsWrites.push({field, value});
+        settingsSnapshot = {...settingsSnapshot, value: {...settingsSnapshot.value, [field]: value}};
+        for (const listener of settingsListeners) listener();
+      }
+    }}},
     connection: {rpc: {async call(channel, endpoint, payload, signal) {
       calls.push({channel, endpoint, payload: JSON.parse(JSON.stringify(payload)), signal});
       return endpoint === 'research-guard/status' ? response : {ok: true, value: {accepted: true}};
@@ -50,12 +65,32 @@ function fixture(initial) {
       unmount() {for (const cell of c.cells) cell?.cleanup?.();}
     };
   };
-  return {mount, Panel, calls, opened, timers, setResponse(value) {response = value;}};
+  return {mount, Panel, SettingsPage, calls, opened, timers, settingsWrites,
+    setResponse(value) {response = value;}, setSettingsSnapshot(value) {
+      settingsSnapshot = value; for (const listener of settingsListeners) listener();
+    }};
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const ok = episodes => ({ok: true, value: {schema: 1, episodes}});
 const episode = (state, extra = {}) => ({schema: 1, episodeId: 'episode-1', state, ...extra});
 const flatten = tree => Array.isArray(tree) ? tree.flatMap(flatten) : !tree || typeof tree !== 'object' ? [tree] : [tree, ...(tree.children ?? []).flatMap(flatten)];
+
+test('mode card offers three choices and saves only the selected mode in DSH settings', async () => {
+  const f = fixture(ok([]));
+  const element = f.SettingsPage({view: 'page'});
+  const page = f.mount(element.type, element.props);
+  let tree = page.render();
+  let select = flatten(tree).find(x => x?.type === 'select');
+  assert.deepEqual(flatten(select).filter(x => x?.type === 'option').map(x => x.props.value),
+    ['observe', 'stop', 'recover']);
+  assert.equal(select.props.value, 'recover');
+  await select.props.onChange({target: {value: 'stop'}});
+  tree = page.render(); select = flatten(tree).find(x => x?.type === 'select');
+  assert.equal(select.props.value, 'stop');
+  assert.deepEqual(f.settingsWrites, [{field: 'mode', value: 'stop'}]);
+  assert.ok(flatten(tree).some(x => typeof x === 'string' && x.includes('重启 DSH Web')));
+  page.unmount();
+});
 
 test('polls only sidecar RPC, one card per episode, stops exact session/episode, navigates native one-shot child', async () => {
   const f = fixture(ok([episode('RECOVERING', {childSessionId: 'child-1', requests: 2})]));

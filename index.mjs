@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {mkdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createUserMessage} from '@deepseek-ai/dsh-llm';
+import z from '@deepseek-ai/schemastery';
 import * as guard from './core/plugin.mjs';
 import {BoundedRecovery,RecoveryStopped} from './core/recovery-state.mjs';
 import {createRecoveryLedger,recoverOnce} from './core/recovery-ledger.mjs';
@@ -15,13 +16,19 @@ import {createStatusStore} from './status-store.mjs';
 import {registerGuardRpc} from './web-rpc.mjs';
 import {validateSettings} from './settings.mjs';
 export const name='dsh-rice-patrol';
-export const inject=['llm','tools','agents','subagents','connection'];
+export const inject=['llm','tools','agents','subagents','connection','settings'];
+const ModeSettings=z.object({mode:z.string().default('observe')});
 const endReason=agent=>agent.session.log.filter(e=>e.type==='turn/end').at(-1)?.data?.reason;
 const guardEnded=agent=>endReason(agent)?.reason?.reason==='reasoning-guard:REASONING_LOOP_CONFIRMED';
 const noInbox=agent=>!agent.inbox.nextTurn.length&&!agent.inbox.nextStep.length;
 const activeStates=new Set(['STOPPING','PREPARING','COMPACTING','RECOVERING']);
 export async function apply(ctx,raw){
-  const config=validateSettings(raw);
+  const base=validateSettings(raw);
+  // User choices are stored in DSH's settings document. A mode change applies
+  // on the next host start, so in-flight turns keep their original guard.
+  const scope=ctx.settings.register('rice-patrol',ModeSettings,{base:{mode:base.mode},
+    applies:'restart',validate:value=>{if(!['observe','stop','recover'].includes(value.mode))throw Error('invalid guard mode')}});
+  const config=validateSettings({...base,mode:scope.get().mode});
   const runtime=await installRuntime(ctx,config);
   ctx.effect(()=>async()=>{await runtime.dispose()},'research guard shutdown');
 }

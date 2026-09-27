@@ -66,6 +66,37 @@ window.__ModuleLoader__.load({
       button: {font: 'inherit', fontSize: 12, padding: '5px 9px', borderRadius: 7,
         border: '1px solid var(--dsw-alias-border-l1, #7777)', color: 'inherit', background: 'transparent', cursor: 'pointer'}
     };
+    function ModeSettingsPage({scope}) {
+      const [snapshot, setSnapshot] = useState(() => scope.getSnapshot());
+      const [pending, setPending] = useState(false);
+      const [notice, setNotice] = useState('');
+      useEffect(() => scope.subscribe(() => setSnapshot(scope.getSnapshot())), [scope]);
+      const mode = ['observe', 'stop', 'recover'].includes(snapshot.value?.mode) ? snapshot.value.mode : 'observe';
+      async function choose(event) {
+        const next = event.target.value;
+        if (!['observe', 'stop', 'recover'].includes(next) || pending || next === mode) return;
+        setPending(true); setNotice('');
+        try {
+          await scope.set('mode', next);
+          setNotice('已保存。重启 DSH Web 后，新的模式才会生效；正在运行的任务不变。');
+        } catch {
+          setNotice('保存失败。请检查连接和设置写入权限。');
+        } finally { setPending(false); }
+      }
+      return h('section', {'aria-label': 'Rice Patrol 设置', style: style.card},
+        h('div', {style: style.title}, 'Rice Patrol · 重复输出保护'),
+        h('p', {style: style.text}, '选择检测到持续短句重复时的处理方式。此设置不处理普通的输出 token 上限。'),
+        h('label', {style: style.text, htmlFor: 'rice-patrol-mode'}, '处理模式'),
+        h('select', {id: 'rice-patrol-mode', 'aria-label': '处理模式', value: mode,
+          disabled: pending || !snapshot.writable || snapshot.status !== 'ready', onChange: choose,
+          style: {...style.button, display: 'block', marginTop: 6, minWidth: 220}},
+          h('option', {value: 'observe'}, '仅观察：记录，不停止'),
+          h('option', {value: 'stop'}, '停止：确认重复后截断'),
+          h('option', {value: 'recover'}, '恢复：截断、整理交接并继续')),
+        h('p', {style: style.text}, '恢复有固定次数和超时上限；遇到不确定的工具或后台任务会停止并提示。'),
+        !snapshot.writable ? h('p', {role: 'status', style: style.text}, '当前设置不可写。') : null,
+        notice ? h('p', {role: 'status', style: style.text}, notice) : null);
+    }
     function createPanel(ctx) {
       function StatusCard({data, sessionId, refresh}) {
         const [pending, setPending] = useState(false);
@@ -154,7 +185,11 @@ window.__ModuleLoader__.load({
       // A public additive slot; no replacement of composer or transcript.
       ctx.slots.inject('conversation.input.dock', () => ctx.slots.register(
         {name: 'conversation.input.dock', id: 'research-guard-status', order: 30}, createPanel(ctx)));
+      const scope = ctx.settingsScope.bind({namespace: 'rice-patrol'});
+      ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register(
+        {name: 'plugins.bundle.config', key: 'dsh-rice-patrol'},
+        seat => seat.view === 'page' ? h(ModeSettingsPage, {scope}) : null));
     }
-    return {inject: ['slots', 'connection', 'uiWorkspace'], apply};
+    return {inject: ['slots', 'connection', 'uiWorkspace', 'settingsScope'], apply};
   }
 });
