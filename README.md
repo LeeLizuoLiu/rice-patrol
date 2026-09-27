@@ -22,6 +22,8 @@ Choose a mode in **Plugins → rice-patrol**:
 
 Recover makes at most one automatic attempt. If it cannot verify a background job or tool result, it pauses for you instead of guessing. Finished or blocked reminders have a dismiss button; their records remain. Buttons and explanations follow the DSH interface language (Chinese or English). When no language is explicitly selected in DSH, it uses the browser's system language preference. Changing mode requires a DSH Web restart and does not change an in-flight task.
 
+The handoff checks tools and background jobs first, extracts a clean record without the degenerate reasoning tail, **compacts that clean record once**, then starts a fresh Agent. It does not compact the full old session or delete completed file edits.
+
 ## Install
 
 Tested with DSH `0.1.6-alpha.2`:
