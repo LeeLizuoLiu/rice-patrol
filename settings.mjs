@@ -1,6 +1,8 @@
-import {isAbsolute} from 'node:path';
+import {homedir} from 'node:os';
+import {isAbsolute,join} from 'node:path';
 export function validateSettings(raw={}) {
   const c={mode:'observe',provider:'*',model:'*',
+    stateDirectory:join(process.env.DSH_HOME??join(homedir(),'.dsh'),'rice-patrol-state'),
     stopTimeoutMs:10000,compactTimeoutMs:15000,resumeTimeoutMs:60000,maxResumeRequests:4,
     maxCleanInputChars:128000,compactAboveChars:16000,maxCheckpointChars:64000,
     maxMandatoryChars:48000,maxUserChars:16000,

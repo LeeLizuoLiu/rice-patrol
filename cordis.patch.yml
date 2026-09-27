@@ -1,5 +1,5 @@
-# Explicit paths and mode are required in the user's profile overlay.
-# Installation alone loads neither enforcement nor recovery.
+# UI enablement starts observe mode. Its state directory defaults beneath
+# DSH_HOME (or ~/.dsh); stop/recover still require an explicit mode choice.
 - insert:
     - id: rice-patrol
       name: dsh-rice-patrol

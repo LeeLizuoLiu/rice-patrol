@@ -26,7 +26,7 @@ Use an **absolute** `stateDirectory` path that DSH can write. For example, save 
     stateDirectory: /absolute/path/to/rice-patrol-state
 ```
 
-Start DSH with `dsh web --patch /absolute/path/to/rice-patrol.yml`. `observe` records signals without cancelling a model request. To use the bounded recovery prototype, change `mode` to `recover` and review the limits in `config/recover.example.yml`. You can instead choose `stop` to cancel without recovery. Remove the overlay and restart to disable it.
+Start DSH with `dsh web --patch /absolute/path/to/rice-patrol.yml`. `observe` records signals without cancelling a model request. You may omit `stateDirectory`; it defaults to `rice-patrol-state` below `DSH_HOME` (or `~/.dsh`). To use the bounded recovery prototype, change `mode` to `recover` and review the limits in `config/recover.example.yml`. You can instead choose `stop` to cancel without recovery. Remove the overlay and restart to disable it.
 
 ## What the guard does
 

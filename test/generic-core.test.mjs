@@ -98,6 +98,9 @@ test('failed request admission cannot issue cancellation and dispose cancels onl
 });
 
 test('wildcard defaults cover arbitrary providers and models with optional exact filters',()=>{
+  const defaultDirectory=validateSettings().stateDirectory;
+  assert.ok(defaultDirectory.endsWith('/rice-patrol-state'));
+  assert.ok(defaultDirectory.startsWith('/'));
   const defaults=validateSettings({stateDirectory:'/tmp/synthetic-guard'});
   assert.equal(defaults.provider,'*');assert.equal(defaults.model,'*');
   assert.equal(matchesRoute(defaults,{provider:'vendor-x',model:'model-without-effort'}),true);
