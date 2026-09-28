@@ -49,7 +49,11 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
       assert.equal(payload.provider,route.provider);assert.equal(payload.model,route.model);
       assert.equal(payload.reasoningEffort,route.reasoningEffort);
       if(route.reasoningEffort===undefined)assert.equal(Object.hasOwn(payload,'reasoningEffort'),false);
-      const kind=messages.includes('CLEAN_COMPACTION_INPUT')?'compact':messages.includes('CLEAN_RECOVERY_CHECKPOINT')?'child':'parent';
+      const compactCount=stats.requests.filter(request=>request.root===root&&request.kind==='compact').length;
+      const resumeCount=stats.requests.filter(request=>request.root===root&&request.kind==='resume').length;
+      const laterUserTurn=repeatTurn&&compactCount===1&&resumeCount>=2;
+      const kind=messages.includes('CLEAN_COMPACTION_INPUT')?'compact':
+        laterUserTurn?'parent':messages.includes('Rice Patrol clean checkpoint')?'resume':'parent';
       const number=stats.requests.filter(request=>request.kind===kind&&request.root===root).length+1;
       const request={root,kind,number,payload};stats.requests.push(request);
       res.on('close',()=>stats.closes.push({...request,natural:res.writableEnded}));
@@ -75,7 +79,13 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
         if(number===1)tool(res,'counter',`parent-counter-${root}`);else loop(res);
         return;
       }
-      assert.ok(!messages.includes('Let me try.'),'original reasoning tail must be absent from child input');
+      assert.ok(!messages.includes('Let me try.'),'original reasoning tail must be absent from resumed main Agent input');
+      if(scenario==='many-requests'){
+        if(number<=20)tool(res,'record',`main-record-${root}-${number}`,
+          {label:`SYNTHETIC_RECORD_${root}_${number}`});
+        else finish(res);
+        return;
+      }
       if(number===1){tool(res,'record',`child-record-${root}-1`,{label:`SYNTHETIC_RECORD_${root}`});return}
       if(scenario==='duplicate'&&number===2){tool(res,'record',`child-record-${root}-2`,{label:`SYNTHETIC_RECORD_${root}`});return}
       if(scenario==='child-loop'){loop(res);return}
@@ -161,6 +171,15 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
       throw error;
     });
     await Promise.all(parents.map(parent=>parent.agent.whenIdle()));
+    if(scenario==='child-loop')statuses=await until(async()=>{
+      const current=[];
+      for(const parent of parents){
+        const reply=await rpc('research-guard/status',{sessionId:parent.agent.session.id});
+        current.push(reply.value.episodes[0]);
+      }
+      return current.every((status,index)=>status?.episodeId!==statuses[index]?.episodeId&&
+        terminal.has(status?.state))?current:false;
+    });
     if(repeatTurn){
       assert.equal(plain,false);
       assert.equal(routes.length,1);
@@ -195,13 +214,12 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
         await until(()=>stats.closes.filter(close=>close.kind==='parent'&&!close.natural).length===(repeatTurn?2:1)*routes.length);
       assert.equal(stats.requests.filter(request=>request.kind==='parent').length,(repeatTurn?3:2)*routes.length);
       assert.equal(stats.counter,routes.length);
-      for(const log of parentEvents)assert.deepEqual(endOf(log),
-        {kind:'aborted',reason:{kind:'hook',reason:'reasoning-guard:REASONING_LOOP_CONFIRMED'}});
-      assert.ok(stats.children.length<=(repeatTurn?2:1)*routes.length,'at most one fresh child per user turn');
-      assert.ok(stats.requests.length<=7*(repeatTurn?2:1)*routes.length,'finite parent plus auxiliary plus child request budget');
+      for(const log of parentEvents)assert.ok(log.some(event=>event.type==='turn/end'&&
+        event.data.reason?.reason?.reason==='reasoning-guard:REASONING_LOOP_CONFIRMED'));
+      assert.equal(stats.children.length,0,'recovery stays in the original Agent');
       for(const parent of parents)assert.equal(stats.streams.filter(stream=>
         stream.sessionId===parent.agent.session.id&&stream.purpose!=='compaction'&&stream.aborted).length,
-        scenario==='ignores-abort'?2:(repeatTurn?2:1));
+        scenario==='ignores-abort'||scenario==='child-loop'?2:(repeatTurn?2:1));
     }
     assert.deepEqual(stats.errors,[],'no adapter, route, or AgentLoop errors');
     assert.ok(stats.prepared.length>=stats.requests.length,'requests pass the public prepareCall contract');
@@ -215,7 +233,8 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
         assert.deepEqual((await rpc('research-guard/status',{sessionId})).value.episodes,[]);
       }
     }
-    return {stats,status:statuses[0],statuses,parentEvents:parentEvents[0],allParentEvents:parentEvents,childEvents,stopAccepted};
+    return {stats,status:statuses[0],statuses,parentEvents:parentEvents[0],allParentEvents:parentEvents,childEvents,stopAccepted,
+      mainSurface:parents[0].agent.session.deriveMessages()};
   }finally{
     await plugin?.dispose();
     for(const parent of parents)await parent.dispose();
@@ -228,19 +247,31 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
   }
 }
 
-test('generic public API: AgentLoop cancels upstream and fresh same-route child completes a tool',{timeout:10000},async()=>{
+test('generic public API: AgentLoop cancels upstream, compacts, then resumes the same Agent',{timeout:10000},async()=>{
   const result=await runScenario('normal');
   assert.equal(result.status.state,'COMPLETED',JSON.stringify(result.status));
-  assert.equal(result.stats.record,1);assert.equal(result.stats.children.length,1);
-  assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','compact','child','child']);
-  assert.equal(endOf(result.childEvents[0])?.kind,'completed');
+  assert.equal(result.stats.record,1);assert.equal(result.stats.children.length,0);
+  assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','compact','resume','resume']);
+  assert.equal(endOf(result.parentEvents)?.kind,'completed');
+  assert.equal(result.parentEvents.filter(event=>event.type==='compaction/summary').length,1);
+  assert.ok(!JSON.stringify(result.stats.requests.find(request=>request.kind==='resume').payload.messages).includes('Let me try.'));
+  assert.ok(!JSON.stringify(result.mainSurface).includes('Let me try.'));
+  assert.ok(result.parentEvents.some(event=>event.type==='user/message'&&
+    event.surfaceOp?.op==='replace'),'the checkpoint replaced only the model-visible surface');
+});
+
+test('resumed main Agent can make more than the old 16-request child limit',{timeout:10000},async()=>{
+  const result=await runScenario('many-requests');
+  assert.equal(result.status.state,'COMPLETED',JSON.stringify(result.status));
+  assert.equal(result.stats.requests.filter(request=>request.kind==='resume').length,21);
+  assert.equal(result.stats.record,20);
+  assert.equal(result.stats.children.length,0);
 });
 
 test('generic public API: a later user turn in the same session receives a fresh automatic recovery',{timeout:10000},async()=>{
   const result=await runScenario('normal',{repeatTurn:true});
-  assert.equal(result.status.state,'COMPLETED',JSON.stringify({status:result.status,
-    catalogs:result.parentEvents.filter(event=>event.type==='subagent/catalog').map(event=>event.data)}));
-  assert.equal(result.stats.children.length,2);
+  assert.equal(result.status.state,'COMPLETED',JSON.stringify(result.status));
+  assert.equal(result.stats.children.length,0);
   assert.equal(result.stats.requests.filter(request=>request.kind==='compact').length,2);
   assert.equal(result.stats.record,1,'the completed side effect was not repeated');
 });
@@ -249,55 +280,52 @@ test('generic public API: stopping one recovery does not disable later user turn
   const result=await runScenario('user-stop',{repeatTurn:true});
   assert.equal(result.stopAccepted,true);
   assert.equal(result.status.state,'COMPLETED',JSON.stringify(result.status));
-  assert.equal(result.stats.children.length,1);
+  assert.equal(result.stats.children.length,0);
   assert.equal(result.stats.requests.filter(request=>request.kind==='compact').length,2);
 });
 
-test('generic public API: recovery compacts text and passes a verified user image to one child',{timeout:10000},async()=>{
+test('generic public API: recovery compacts text and restores a verified user image to the main Agent',{timeout:10000},async()=>{
   const result=await runScenario('normal',{image:true});
   assert.equal(result.status.state,'COMPLETED',JSON.stringify(result.status));
   assert.equal(result.stats.imageReads,2);
   const compact=result.stats.requests.find(request=>request.kind==='compact');
-  const child=result.stats.requests.find(request=>request.kind==='child');
+  const continued=result.stats.requests.find(request=>request.kind==='resume');
   assert.ok(!JSON.stringify(compact.payload.messages).includes('"type":"image"'));
-  assert.ok(JSON.stringify(child.payload.messages).includes('"type":"image"'));
-  assert.equal(result.stats.children.length,1);
+  assert.ok(JSON.stringify(continued.payload.messages).includes('"type":"image"'));
+  assert.equal(result.stats.children.length,0);
 });
 
-test('generic public API: duplicate child side effect does not execute twice',{timeout:10000},async()=>{
+test('generic public API: duplicate side effect in the resumed main Agent does not execute twice',{timeout:10000},async()=>{
   const result=await runScenario('duplicate');
   assert.equal(result.stats.record,1,JSON.stringify(result.status));
-  assert.equal(result.stats.children.length,1);
-  assert.ok(result.childEvents[0].filter(event=>event.type==='tool/result').some(event=>event.data.message.content[0].isError));
-  assert.ok(result.stats.requests.filter(request=>request.kind==='child').length<=4);
+  assert.equal(result.stats.children.length,0);
+  assert.ok(result.parentEvents.filter(event=>event.type==='tool/result').some(event=>event.data.message.content[0].isError));
+  assert.ok(result.stats.requests.filter(request=>request.kind==='resume').length<=4);
 });
 
-test('generic public API: second loop stops the only child without another recovery',{timeout:10000},async()=>{
+test('generic public API: second loop in the same user turn stops without another recovery',{timeout:10000},async()=>{
   const result=await runScenario('child-loop');
-  assert.equal(result.stats.record,1,JSON.stringify(result.status));assert.equal(result.stats.children.length,1);
+  assert.equal(result.stats.record,1,JSON.stringify(result.status));assert.equal(result.stats.children.length,0);
   assert.equal(result.status.state,'BLOCKED');
-  assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','compact','child','child']);
-  assert.equal(endOf(result.childEvents[0])?.kind,'aborted');
+  assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','compact','resume','resume']);
+  assert.equal(endOf(result.parentEvents)?.kind,'aborted');
 });
 
 test('generic public API: clean compaction makes one call with the original route and effort',{timeout:10000},async()=>{
   const result=await runScenario('compact');
   assert.equal(result.status.state,'COMPLETED',JSON.stringify({status:result.status,requests:result.stats.requests.map(({kind})=>kind),streams:result.stats.streams.map(({purpose})=>purpose),prepared:result.stats.prepared}));assert.equal(result.stats.record,1);
-  assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','compact','child','child']);
+  assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','compact','resume','resume']);
   assert.equal(result.status.compactCalls,1);
   assert.ok(!JSON.stringify(result.stats.requests.find(request=>request.kind==='compact').payload.messages).includes('Let me try.'));
 });
 
-test('generic public API: token-capped compaction discards its partial text and resumes from verified facts',{timeout:10000},async()=>{
+test('generic public API: incomplete compaction never wakes the main Agent',{timeout:10000},async()=>{
   const result=await runScenario('compact-max-tokens');
-  assert.equal(result.status.state,'COMPLETED',JSON.stringify(result.status));
-  assert.equal(result.status.compactionFallback,'max-tokens');
-  assert.equal(result.stats.children.length,1);
+  assert.equal(result.status.state,'BLOCKED',JSON.stringify(result.status));
+  assert.equal(result.status.reason,'COMPACTION_MAX_TOKENS');
+  assert.equal(result.stats.children.length,0);
   assert.equal(result.stats.requests.filter(request=>request.kind==='compact').length,1);
-  const child=JSON.stringify(result.stats.requests.find(request=>request.kind==='child').payload.messages);
-  assert.ok(child.includes('CLEAN_COMPACTION_MAX_TOKENS'));
-  assert.ok(child.includes('mandatory-facts'));
-  assert.ok(!child.includes('INCOMPLETE_SYNTHETIC_SUMMARY'));
+  assert.equal(result.stats.requests.filter(request=>request.kind==='resume').length,0);
 });
 
 test('generic public API: host tool scope preserves ordinary recovery tools',{timeout:10000},async()=>{
@@ -325,10 +353,10 @@ test('generic public API: a second provider and model recover with effort omitte
 test('generic public API: simultaneous recovery keeps two provider/model/effort routes isolated',{timeout:10000},async()=>{
   const result=await runScenario('compact',{routes:[routeA,routeB]});
   assert.ok(result.statuses.every(status=>status.state==='COMPLETED'),JSON.stringify(result.statuses));
-  assert.equal(result.stats.counter,2);assert.equal(result.stats.record,2);assert.equal(result.stats.children.length,2);
+  assert.equal(result.stats.counter,2);assert.equal(result.stats.record,2);assert.equal(result.stats.children.length,0);
   for(const root of [0,1])assert.deepEqual(result.stats.requests.filter(request=>request.root===root).map(request=>request.kind),
-    ['parent','parent','compact','child','child']);
-  assert.ok(result.childEvents.every(log=>endOf(log)?.kind==='completed'));
+    ['parent','parent','compact','resume','resume']);
+  assert.ok(result.allParentEvents.every(log=>endOf(log)?.kind==='completed'));
 });
 
 test('generic public API: recovery follows the effective request route after host routing',{timeout:10000},async()=>{

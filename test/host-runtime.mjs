@@ -13,7 +13,7 @@ export async function createHost() {
   });
   const fibers = [];
   for (const [pkg, config] of [
-    ['dsh-agent', {}], ['dsh-session', {}], ['dsh-session-projection', {}],
+    ['dsh-agent', {}], ['dsh-session', {}], ['dsh-session-projection', {}],['dsh-token-meter', {}],
     ['dsh-system-prompt', {includeRuntimeContext:false}], ['dsh-tools', {mode:'native'}],
     ['dsh-llm', {}], ['dsh-agent-loop', {agents:[]}], ['dsh-llm-retry', {}]
   ]) {

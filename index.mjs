@@ -7,7 +7,8 @@ import * as guard from './core/plugin.mjs';
 import {BoundedRecovery,RecoveryStopped} from './core/recovery-state.mjs';
 import {createRecoveryLedger,recoverOnce} from './core/recovery-ledger.mjs';
 import {buildCleanCheckpoint} from './core/clean-checkpoint.mjs';
-import {buildRecoveryPrompt,verifyRecoveryImages} from './core/recovery-prompt.mjs';
+import {verifyRecoveryImages} from './core/recovery-prompt.mjs';
+import {commitMainSessionHandoff} from './core/main-session-handoff.mjs';
 import {interceptRecoveryIntent} from './core/recovery-host-controls.mjs';
 import {runBoundedCompaction} from './core/bounded-compaction.mjs';
 import {installObserve} from './core/observe-plugin.mjs';
@@ -17,7 +18,7 @@ import {createStatusStore} from './status-store.mjs';
 import {registerGuardRpc} from './web-rpc.mjs';
 import {validateSettings} from './settings.mjs';
 export const name='dsh-rice-patrol';
-export const inject=['llm','tools','agents','subagents','connection','settings','jobs'];
+export const inject=['llm','tools','agents','sessions','tokenMeter','connection','settings','jobs'];
 const ModeSettings=z.object({mode:z.string().default('stop')});
 const endReason=agent=>agent.session.log.filter(e=>e.type==='turn/end').at(-1)?.data?.reason;
 const guardEnded=agent=>endReason(agent)?.reason?.reason==='reasoning-guard:REASONING_LOOP_CONFIRMED';
@@ -57,73 +58,39 @@ export async function installRuntime(ctx,raw){
   observer=installObserve(ctx,{provider,model,sink,externalDetector:true});
   const ledger=createRecoveryLedger(join(config.stateDirectory,'recovery'));
   const recovery=new BoundedRecovery(config);
-  const active=new Map(),children=new Map(),jobs=new Set(),cleanups=new WeakMap();
+  const active=new Map(),resumed=new Map(),jobs=new Set(),cleanups=new WeakMap();
   let disposed=false;
   const publish=async(record,state,reason)=>{
     const data={episodeId:record.episodeId,state,
-      ...(reason?{reason}:{}),...(record.childId?{childSessionId:record.childId}:{}),
-      ...(recovery.status(record.taskId)?{requests:recovery.status(record.taskId).resumeRequests,
-        compactCalls:recovery.status(record.taskId).compactCalls}:{})};
-    if(recovery.status(record.taskId)?.compactionFallback==='max-tokens')data.compactionFallback='max-tokens';
+      ...(reason?{reason}:{}),
+      ...(recovery.status(record.taskId)?{compactCalls:recovery.status(record.taskId).compactCalls}:{})};
     record.state=state;
     await status.set(record.taskId,data);
     sink.record('RECOVERY_STAGE',{reason:state});
   };
   const interrupt=record=>{record.interrupted=true;recovery.userInterruption(record.taskId);record.controller.abort()};
-  // This hook runs before the child can receive its prompt or make a request.
-  // A pending publication permit is tied to the exact parent; no seed is used.
-  offs.push(ctx.on('agent/created',async({agent})=>{
-    const record=active.get(agent.session.header.parentSession);
-    if(!record?.expectChild)return;
-    if(record.childId)throw new RecoveryStopped('UNEXPECTED_SECOND_CHILD');
-    record.childId=agent.session.id;record.expectChild=false;children.set(agent.session.id,record);
-  }));
-  offs.push(ctx.on('agent/disposed',({agent})=>children.delete(agent.session.id)));
-  offs.push(ctx.on('agent/request',async(payload,next)=>{
-    const record=children.get(payload.agent.session.id);
-    if(!record)return next();
-    record.gate.check();
-    const route=await next();
-    if(route.provider!==record.provider||route.model!==record.model||route.reasoningEffort!==record.effort)
-      throw new RecoveryStopped('RECOVERY_ROUTE_MISMATCH');
-    return route;
-  }));
-  offs.push(ctx.on('llm/stream',(options,next)=>{
-    const record=children.get(options.sessionId);
-    if(record){
-      if(options.provider!==record.provider||options.model!==record.model||options.reasoningEffort!==record.effort)
-        throw new RecoveryStopped('RECOVERY_ROUTE_MISMATCH');
-      record.gate.permitRequest();
-    }
-    return next();
-  }));
-  // Authorization remains the host's decision. This final guard only denies;
-  // neither hooks nor a new Agent may enlarge the permitted tool set.
-  offs.push(ctx.tools.guard(exec=>{
-    const record=children.get(exec.agent?.session.id);if(!record)return;
-    try{record.gate.check()}catch{return 'Recovery stopped'}
-    if(config.recoveryTools!=='host'&&!config.recoveryTools.includes(exec.name))
-      return 'Tool outside bounded recovery scope';
-  }));
+  // The main Agent has no request/tool-count budget. Keep exact completed
+  // side effects from the stopped turn out of its first resumed turn.
   offs.push(ctx.on('tools/execute',async(exec,next)=>{
-    const record=children.get(exec.agent?.session.id);if(!record)return next();
-    record.gate.check();
-    if(config.recoveryTools!=='host'&&!config.recoveryTools.includes(exec.name))
-      throw new RecoveryStopped('RECOVERY_TOOL_DENIED');
-    const reservation=await record.journal.reserve({toolName:exec.name,arguments:exec.arguments,callId:exec.callId});
-    record.gate.permitTool({kind:reservation.skipped?'read':'side-effect',operationKey:reservation.operationKey});
+    const entry=resumed.get(exec.agent?.session.id);
+    if(!entry)return next();
+    const reservation=await entry.journal.reserve({toolName:exec.name,arguments:exec.arguments,callId:exec.callId});
     try{
-      const result=await next();const saved=await record.journal.settle(reservation,{isError:result.isError});
-      if(!saved.recorded&&!saved.skipped)record.journalIncomplete=true;
+      const result=await next();
+      const saved=await entry.journal.settle(reservation,{isError:result.isError});
+      if(!saved.recorded&&!saved.skipped)entry.incomplete=true;
       return result;
-    }catch(error){await record.journal.settle(reservation,{isError:true});throw error}
+    }catch(error){await entry.journal.settle(reservation,{isError:true});throw error}
+  }));
+  offs.push(ctx.on('session/event',(session,event)=>{
+    if(event.type==='turn/end')resumed.delete(session.id);
   }));
   offs.push(registerGuardRpc(ctx,
     async(endpoint,payload)=>{
       if(!['research-guard/status','research-guard/stop','research-guard/dismiss'].includes(endpoint))return {ok:false,error:{code:'gateway/not-found',message:'Unknown endpoint',details:{}}};
       if(typeof payload?.sessionId!=='string'||!payload.sessionId||payload.sessionId.length>256)
         return {ok:false,error:{code:'gateway/bad-request',message:'Invalid session',details:{}}};
-      if(endpoint==='research-guard/status'){let latest=await status.get(payload.sessionId);const live=active.has(payload.sessionId)&&recovery.status(payload.sessionId);if(latest?.dismissed)latest=null;if(latest&&live)latest={...latest,requests:live.resumeRequests,compactCalls:live.compactCalls};return {ok:true,value:{schema:1,episodes:latest?[latest]:[]}}}
+      if(endpoint==='research-guard/status'){let latest=await status.get(payload.sessionId);const live=active.has(payload.sessionId)&&recovery.status(payload.sessionId);if(latest?.dismissed)latest=null;if(latest&&live)latest={...latest,compactCalls:live.compactCalls};return {ok:true,value:{schema:1,episodes:latest?[latest]:[]}}}
       if(endpoint==='research-guard/dismiss'){
         if(typeof payload.episodeId!=='string'||!payload.episodeId||payload.episodeId.length>180)
           return {ok:false,error:{code:'gateway/bad-request',message:'Invalid episode',details:{}}};
@@ -148,10 +115,7 @@ export async function installRuntime(ctx,raw){
         return;
       }
       if(event.status!=='TERMINATED'||event.reason!=='REASONING_LOOP_CONFIRMED')return;
-      const root=children.get(parent.session.id);
-      if(root){recovery.confirmGuardAgain(root.taskId);return;}
-      // Recovered children and other delegated Agents are never recovery roots,
-      // including after a process restart when the live Map is empty.
+      // Other delegated Agents are not recovery roots.
       if(parent.session.header.parentSession||active.has(parent.session.id)||disposed)return;
       const cleanup=new Promise(resolve=>cleanups.set(options,resolve));
       const record={taskId:parent.session.id,parent,episodeId:randomUUID(),state:'STOPPING',cleanup,
@@ -161,7 +125,7 @@ export async function installRuntime(ctx,raw){
       record.offIntent=interceptRecoveryIntent(parent,()=>interrupt(record));
       const job=run(record).catch(async error=>{
         await publish(record,record.interrupted?'INTERRUPTED':'BLOCKED',error?.code??'INTEGRATION_ERROR').catch(()=>{});
-      }).finally(()=>{record.offIntent();record.offChildIntent?.();active.delete(record.taskId);jobs.delete(job)});
+      }).finally(()=>{record.offIntent();active.delete(record.taskId);jobs.delete(job)});
       jobs.add(job);
     }});
   async function run(record){
@@ -230,25 +194,15 @@ export async function installRuntime(ctx,raw){
                 finishKind==='tool-calls'?'COMPACTION_UNEXPECTED_TOOL_CALL':'COMPACTION_NO_FINISH');
           return {modelKey,usedOnlyCleanInput:true,text};
         },
-        resume:async({checkpoint,handoffImages,signal,gate,completedOperationKeys})=>{
-          const prompt=await buildRecoveryPrompt(checkpoint,handoffImages,ctx.get('attachments'),signal);
-          record.gate=gate;record.journal=await createToolJournal({directory:join(config.stateDirectory,'tools'),taskId,
-            completedOperationKeys:initial.completedSideEffectKeys,readOnlyTools:['read','glob','grep']});
-          signal.throwIfAborted();record.expectChild=true;
-          const run=await ctx.subagents.start('spawn',{parent,signal,label:'Research Guard recovery',
-            maxDepth:(parent.session.header.delegationDepth??0)+1,
-            agentOptions:{provider,model,...(record.effort!==undefined?{reasoningEffort:record.effort}:{})},
-            ...(config.recoveryTools==='host'?{}:{toolFilter:{allow:config.recoveryTools}}),
-            prompt});
-          try{
-            if(!run.localAgent||record.childId!==run.localAgent.session.id)throw new RecoveryStopped('CHILD_LIFECYCLE_NOT_OBSERVED');
-            // The provider has already delivered the initial checkpoint prompt.
-            record.offChildIntent=interceptRecoveryIntent(run.localAgent,()=>interrupt(record));
-            await publish(record,'RECOVERING');
-            const result=await run.result;
-            if(record.journalIncomplete)throw new RecoveryStopped('TOOL_JOURNAL_INCOMPLETE');
-            return {freshAgent:true,modelKey,turnClosed:result.stopReason==='completed',guardConfirmedAgain:guardEnded(run.localAgent)};
-          }finally{await run.dispose()}
+        resume:async({checkpoint,handoffImages,signal})=>{
+          await verifyRecoveryImages(handoffImages,ctx.get('attachments'),signal);
+          await publish(record,'RECOVERING');
+          const journal=await createToolJournal({directory:join(config.stateDirectory,'tools'),
+            taskId:episodeId,completedOperationKeys:initial.completedSideEffectKeys,
+            readOnlyTools:['read','glob','grep']});
+          resumed.set(taskId,{journal,incomplete:false});
+          try{return await commitMainSessionHandoff({ctx,parent,checkpoint,images:handoffImages,provider,model,signal})}
+          catch(error){resumed.delete(taskId);throw error}
         }
       }});
     });

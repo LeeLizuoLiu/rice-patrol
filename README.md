@@ -18,18 +18,18 @@ Choose a mode in **Plugins → rice-patrol**:
 | --- | --- |
 | **Stop (default)** | Stop the current task and wait for you. |
 | **Observe** | Record the signal without stopping the task. |
-| **Recover** | Stop the task, compact verified work records, and let one fresh Agent try to continue. |
+| **Recover** | Stop the current request, summarize verified work, then resume the same Agent from the clean checkpoint. |
 
-Recover makes at most one automatic attempt **per user turn**. A later user turn in the same session can recover again if repetition recurs. If the fresh Agent itself repeats during recovery, that turn stops instead of restarting indefinitely. If Rice Patrol cannot verify a background job or tool result, it pauses for you instead of guessing. Finished or blocked reminders have a dismiss button; their records remain. Buttons and explanations follow the DSH interface language (Chinese or English). When no language is explicitly selected in DSH, it uses the browser's system language preference. Changing mode requires a DSH Web restart and does not change an in-flight task.
+Recover makes at most one automatic attempt **per user turn**. A later user turn in the same session can recover again if repetition recurs. If the resumed Agent repeats in the same user turn, it stops instead of restarting indefinitely. If Rice Patrol cannot verify a background job or tool result, it pauses for you instead of guessing. Finished or blocked reminders have a dismiss button; their records remain. Buttons and explanations follow the DSH interface language (Chinese or English). When no language is explicitly selected in DSH, it uses the browser's system language preference. Changing mode requires a DSH Web restart and does not change an in-flight task.
 
-The handoff checks tools and background jobs first, extracts a clean record without the degenerate reasoning tail, **compacts that clean record once**, then starts a fresh Agent. If that one compaction reaches its output token limit, Rice Patrol discards the partial summary and continues from verified user and operation facts only. Timeouts, provider errors and unfinished streams still pause recovery. Uploaded user images are checked and passed to the new Agent through DSH's saved image references; the compaction call receives no image bytes. It does not compact the full old session or delete completed file edits.
+The handoff checks tools and background jobs first, extracts a clean record without the degenerate reasoning tail, and **summarizes that record once**. Only after the summary is complete does Rice Patrol replace the main Agent's model-visible history and wake that Agent for a new turn. It does not let the stopped generation run on. An incomplete summary, provider error, or unfinished stream pauses recovery; it does not start the main Agent with a partial checkpoint. Saved user images are verified and restored by reference; the summary call receives no image bytes. Completed file edits remain in the workspace.
 
 ## Install
 
 Tested with DSH `0.1.6-alpha.2`:
 
 ```sh
-dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.6
+dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.7
 ```
 
 Restart DSH Web, enable **both rice-patrol and its component** on the Plugins page, then choose a mode in its settings. Installing the package alone does not activate the guard.
@@ -38,10 +38,12 @@ Restart DSH Web, enable **both rice-patrol and its component** on the Plugins pa
 
 - The **50-line window and two qualifying windows** are fixed today. A future update may let users choose the lines per window and the number of windows needed for confirmation.
 - Legitimate tool handoffs have appeared about two seconds after confirmation. Stop and Recover try to cancel immediately and may interrupt such work. Use Observe to assess your workflow first.
-- Recover makes extra model calls. Its limits are 45 seconds for compaction and, for the new Agent, 5 minutes, 16 model requests, and 128 tool calls. Local cancellation does not prove provider billing has stopped.
+- Recover makes one extra model call for summarization, with a 45-second timeout. The resumed main Agent follows DSH's normal task limits; Rice Patrol adds no request-count or tool-count cap. Local cancellation does not prove provider billing has stopped.
 - Behavior still needs validation across models and providers. A plain **Output token limit reached** message is not a detection signal.
 - Recover still pauses if a user attachment is missing or uses an unsupported format, including file attachments. A previous paused recovery is not retried automatically.
 
 v0.2.5 adds a bounded fallback for token-capped compaction and clearer pause messages. The WeakDALearning incident was inspected read-only; its exact compaction finish reason was not retained, so this change addresses a plausible cause rather than claiming to prove it. 60 local tests passed, including a synthetic AgentLoop fallback. No real model call was made for this fix. A previously paused recovery will not restart automatically. See the [recovery validation](docs/RECOVERY_0_2_VALIDATION.md) and [earlier Web validation](docs/VALIDATION.md) for test scope and technical details. MIT licensed.
 
 v0.2.6 ties recovery allowance to explicit user input. Later user messages in the same session can recover automatically if repetition recurs; an older session-wide reservation no longer blocks them. Each user message still gets only one attempt, and repetition inside a recovery child stops that attempt. All 65 local tests passed, including fake-provider multi-turn recovery; there was no new real-service call.
+
+v0.2.7 replaces the child task runner with a checkpoint written to the original session. The same Agent resumes after the checkpoint is written; the old 16-request child limit no longer applies. The local fake-provider tests confirm this path and more than 16 productive follow-up requests. Real-provider behavior still needs observation in ordinary use.

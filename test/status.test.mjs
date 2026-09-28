@@ -31,10 +31,10 @@ test('terminal reminder dismissal is exact and survives restart without deleting
   assert.equal((await createStatusStore(dir).then(next=>next.get('session-a'))).dismissed,true);
  }finally{await rm(dir,{recursive:true,force:true})}
 });
-test('default stop has no new request deadline; recovery tool and call limits reject broadening',()=>{
+test('default stop has no new request deadline; retired child limits are ignored',()=>{
  const cfg=validateSettings({stateDirectory:'/tmp/example'});assert.equal(cfg.mode,'stop');assert.equal(cfg.requestDeadlineMs,undefined);
- assert.equal(cfg.recoveryTools,'host');assert.equal(cfg.alwaysCompact,true);
- assert.equal(cfg.maxResumeRequests,16);assert.equal(cfg.maxResumeToolCalls,128);
- assert.throws(()=>validateSettings({stateDirectory:'/tmp/example',recoveryTools:['shell']}));
- assert.throws(()=>validateSettings({stateDirectory:'/tmp/example',maxResumeRequests:100}));
+ assert.equal(cfg.alwaysCompact,true);
+ assert.equal(cfg.maxResumeRequests,undefined);assert.equal(cfg.maxResumeToolCalls,undefined);
+ const old=validateSettings({stateDirectory:'/tmp/example',maxResumeRequests:16,maxResumeToolCalls:128,recoveryTools:'host'});
+ assert.equal(old.maxResumeRequests,undefined);assert.equal(old.recoveryTools,undefined);
 });

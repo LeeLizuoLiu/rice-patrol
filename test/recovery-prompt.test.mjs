@@ -25,7 +25,7 @@ test('missing image store or failed verification stops before constructing a chi
   assert.equal((await buildRecoveryPrompt('summary',[],undefined)).length,1);
 });
 
-test('bounded recovery carries verified image handoff into its single resume',async()=>{
+test('recovery carries verified image handoff into the main Agent continuation',async()=>{
   const recovery=new BoundedRecovery({compactAboveChars:10000});
   const trigger={taskId:'image-task',turnId:'1',modelKey:'synthetic/model',guardEpisodeId:'guard-one',
     reason:'guard-confirmed',userRevision:0,completedOperationKeys:[]};
@@ -39,7 +39,7 @@ test('bounded recovery carries verified image handoff into its single resume',as
     prepareCleanCheckpoint:async()=>({modelKey:'synthetic/model',excludedGuardTail:true,
       provenance:'deterministic-clean',sourceEpisodeId:'guard-one',text:'summary',
       mandatoryFacts:facts,handoffImages:images}),
-    resume:async args=>{received=args.handoffImages;return {freshAgent:true,turnClosed:true,modelKey:'synthetic/model'}}
+    resume:async args=>{received=args.handoffImages;return {mainAgent:true,handoffCommitted:true,modelKey:'synthetic/model'}}
   };
   const state=await recovery.recover(trigger,adapter);
   assert.equal(state.state,'completed');

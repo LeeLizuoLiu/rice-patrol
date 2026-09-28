@@ -173,22 +173,22 @@ test('known recovery reasons translate with DSH locale, and unknown codes use a 
   f.setLocale('en');
   assert.ok(flatten(card.render()).some(x => x === 'Reason: Check the status of earlier tools or background jobs'));
   card.render({...element.props, data: episode('BLOCKED', {reason: 'MANDATORY_FACTS_TOO_LARGE'})});
-  assert.ok(flatten(card.render()).some(x => x === 'Reason: Required handoff records exceeded the size limit; no new Agent was started'));
+  assert.ok(flatten(card.render()).some(x => x === 'Reason: Required handoff records exceeded the size limit; the main Agent was not resumed'));
   card.render({...element.props, data: episode('BLOCKED', {reason: 'UNSUPPORTED_USER_CONTENT'})});
-  assert.ok(flatten(card.render()).some(x => x === 'Reason: The original task contains an unsupported attachment or content block; no new Agent was started'));
+  assert.ok(flatten(card.render()).some(x => x === 'Reason: The original task contains an unsupported attachment or content block; the main Agent was not resumed'));
   f.setLocale('zh');
-  assert.ok(flatten(card.render()).some(x => x === '原因：原任务包含暂不支持的附件或内容，未启动新 Agent'));
+  assert.ok(flatten(card.render()).some(x => x === '原因：原任务包含暂不支持的附件或内容，主 Agent 没有接续'));
   card.render({...element.props, data: episode('BLOCKED', {reason: 'COMPACTION_INCOMPLETE'})});
-  assert.ok(flatten(card.render()).some(x => x === '原因：整理上下文的模型请求未正常完成，未启动新 Agent'));
+  assert.ok(flatten(card.render()).some(x => x === '原因：整理上下文的模型请求未正常完成，主 Agent 没有接续'));
   f.setLocale('en');
-  assert.ok(flatten(card.render()).some(x => x === 'Reason: The context compaction request did not finish normally; no new Agent was started'));
+  assert.ok(flatten(card.render()).some(x => x === 'Reason: The context compaction request did not finish normally; the main Agent was not resumed'));
   card.render({...element.props, data: episode('BLOCKED', {reason: 'RECOVERY_ALREADY_USED_THIS_TURN'})});
   assert.ok(flatten(card.render()).some(x => x === 'Reason: Recovery was already attempted in this turn; a later user turn can recover again'));
   f.setLocale('zh');
   assert.ok(flatten(card.render()).some(x => x === '原因：本轮对话已尝试恢复；下一轮用户消息可再次自动恢复'));
   f.setLocale('en');
   card.render({...element.props, data: episode('BLOCKED', {reason: 'NEW_UNRECOGNIZED_REASON'})});
-  assert.ok(flatten(card.render()).some(x => x === 'Reason: Recovery paused. Inspect the recovery session or contact the maintainer'));
+  assert.ok(flatten(card.render()).some(x => x === 'Reason: Recovery paused. Inspect the current session'));
   card.unmount(); panel.unmount();
 });
 

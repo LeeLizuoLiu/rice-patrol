@@ -118,13 +118,11 @@ export class BoundedRecovery {
   #userRevision = new Map();
   #active = new Map();
   constructor({ stopTimeoutMs = 10_000, compactTimeoutMs = 15_000, resumeTimeoutMs = 60_000,
-    maxResumeRequests = 4, maxResumeToolCalls = 64, maxCleanInputChars = 48_000,
+    maxCleanInputChars = 48_000,
     compactAboveChars = 8_000, maxCheckpointChars = 12_000, alwaysCompact = false } = {}) {
     this.stopTimeoutMs = positiveInt(stopTimeoutMs, 'stopTimeoutMs');
     this.compactTimeoutMs = positiveInt(compactTimeoutMs, 'compactTimeoutMs');
     this.resumeTimeoutMs = positiveInt(resumeTimeoutMs, 'resumeTimeoutMs');
-    this.maxResumeRequests = positiveInt(maxResumeRequests, 'maxResumeRequests');
-    this.maxResumeToolCalls = positiveInt(maxResumeToolCalls, 'maxResumeToolCalls');
     this.maxCleanInputChars = positiveInt(maxCleanInputChars, 'maxCleanInputChars');
     this.compactAboveChars = positiveInt(compactAboveChars, 'compactAboveChars');
     this.maxCheckpointChars = positiveInt(maxCheckpointChars, 'maxCheckpointChars');
@@ -165,7 +163,7 @@ export class BoundedRecovery {
       if (typeof adapter?.[name] !== 'function') throw new TypeError(`adapter.${name} is required`);
     }
     const state = { state: 'settling', compactCalls: 0, resumeCalls: 0,
-      resumeRequests: 0, resumeToolCalls: 0, modelKey, taskId, turnId, reason: null };
+      modelKey, taskId, turnId, reason: null };
     // Reserve once per user turn before the first await. The durable ledger
     // enforces the same boundary across host restarts.
     this.#tasks.set(taskId, state);
@@ -220,68 +218,32 @@ export class BoundedRecovery {
         // The adapter must route it through its own bounded auxiliary call.
         state.state = 'compacting';
         state.compactCalls++;
-        let summary,usedFallback=false;
-        try {
-          summary = await withBudget(signal => adapter.compactCleanInput({
-            taskId, modelKey, cleanInput: checkpoint.text, signal,
-            maxChars: this.maxCheckpointChars - suffix.length
-          }), controller, this.compactTimeoutMs, 'compact');
-        } catch (error) {
-          if (error?.code !== 'COMPACTION_MAX_TOKENS') throw error;
-          // A token-capped partial summary is unusable. Mandatory facts were
-          // built and checked deterministically, so continue with those alone.
-          // Never use this path for a timeout, transport error, or unsettled call.
-          checkpoint = { ...checkpoint, text:
-            'CLEAN_COMPACTION_MAX_TOKENS: The attempted summary was incomplete and discarded. Continue only from the verified mandatory facts below. Inspect the workspace before acting; do not repeat recorded side effects.' };
-          state.compactionFallback = 'max-tokens';
-          usedFallback = true;
-        }
+        const summary = await withBudget(signal => adapter.compactCleanInput({
+          taskId, modelKey, cleanInput: checkpoint.text, signal,
+          maxChars: this.maxCheckpointChars - suffix.length
+        }), controller, this.compactTimeoutMs, 'compact');
         check();
-        if (!usedFallback) {
-          if (!summary || summary.modelKey !== modelKey ||
-              summary.usedOnlyCleanInput !== true ||
-              typeof summary.text !== 'string' || !summary.text.trim() ||
-              checkpoint.text.length > this.compactAboveChars && summary.text.length >= checkpoint.text.length ||
-              summary.text.length + suffix.length > this.maxCheckpointChars)
-            throw new RecoveryStopped('INVALID_COMPACT_SUMMARY');
-          checkpoint = { ...checkpoint, text: summary.text };
-        }
+        if (!summary || summary.modelKey !== modelKey ||
+            summary.usedOnlyCleanInput !== true ||
+            typeof summary.text !== 'string' || !summary.text.trim() ||
+            checkpoint.text.length > this.compactAboveChars && summary.text.length >= checkpoint.text.length ||
+            summary.text.length + suffix.length > this.maxCheckpointChars)
+          throw new RecoveryStopped('INVALID_COMPACT_SUMMARY');
+        checkpoint = { ...checkpoint, text: summary.text };
       }
       const finalCheckpoint = checkpoint.text + suffix;
       if (finalCheckpoint.length > this.maxCheckpointChars)
         throw new RecoveryStopped('CHECKPOINT_TOO_LARGE');
       state.state = 'resuming';
       state.resumeCalls++;
-      const gate = {
-        permitRequest: () => {
-          check();
-          if (state.resumeRequests >= this.maxResumeRequests)
-            throw new RecoveryStopped('RESUME_REQUEST_BUDGET');
-          state.resumeRequests++;
-        },
-        permitTool: ({ kind, operationKey }) => {
-          check();
-          if(state.resumeToolCalls>=this.maxResumeToolCalls)
-            throw new RecoveryStopped('RESUME_TOOL_BUDGET');
-          state.resumeToolCalls++;
-          if (kind === 'read') return;
-          if (kind !== 'side-effect' || !operationKey || completed.has(operationKey))
-            throw new RecoveryStopped('TOOL_REPLAY_OR_UNIDENTIFIED');
-          // Reserve before execution. The host must durably reconcile outcomes.
-          completed.add(operationKey);
-        },
-        check,
-      };
       const result = await withBudget(signal => adapter.resume({
         taskId, modelKey, guardEpisodeId, checkpoint: finalCheckpoint,
-        mandatoryFacts: checkpoint.mandatoryFacts, handoffImages, signal, gate,
-        completedOperationKeys: [...completedOperationKeys],
-        maxRequests: this.maxResumeRequests
+        mandatoryFacts: checkpoint.mandatoryFacts, handoffImages, signal,
+        completedOperationKeys: [...completedOperationKeys]
       }), controller, this.resumeTimeoutMs, 'resume');
       check();
-      if (result?.guardConfirmedAgain) throw new RecoveryStopped('SECOND_GUARD_CONFIRMATION');
-      if (!result?.turnClosed || !result?.freshAgent || result?.modelKey !== modelKey)
-        throw new RecoveryStopped('RESUME_NOT_CLOSED_OR_WRONG_AGENT');
+      if (!result?.mainAgent || !result?.handoffCommitted || result?.modelKey !== modelKey)
+        throw new RecoveryStopped('MAIN_HANDOFF_NOT_COMMITTED');
       state.state = 'completed';
       return { ...state };
     } catch (error) {

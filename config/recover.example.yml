@@ -9,7 +9,4 @@
     stopTimeoutMs: 10000
     compactTimeoutMs: 45000
     resumeTimeoutMs: 300000
-    maxResumeRequests: 16
-    maxResumeToolCalls: 128
     alwaysCompact: true
-    recoveryTools: host
