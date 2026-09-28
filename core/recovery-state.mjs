@@ -216,18 +216,32 @@ export class BoundedRecovery {
         // The adapter must route it through its own bounded auxiliary call.
         state.state = 'compacting';
         state.compactCalls++;
-        const summary = await withBudget(signal => adapter.compactCleanInput({
-          taskId, modelKey, cleanInput: checkpoint.text, signal,
-          maxChars: this.maxCheckpointChars - suffix.length
-        }), controller, this.compactTimeoutMs, 'compact');
+        let summary,usedFallback=false;
+        try {
+          summary = await withBudget(signal => adapter.compactCleanInput({
+            taskId, modelKey, cleanInput: checkpoint.text, signal,
+            maxChars: this.maxCheckpointChars - suffix.length
+          }), controller, this.compactTimeoutMs, 'compact');
+        } catch (error) {
+          if (error?.code !== 'COMPACTION_MAX_TOKENS') throw error;
+          // A token-capped partial summary is unusable. Mandatory facts were
+          // built and checked deterministically, so continue with those alone.
+          // Never use this path for a timeout, transport error, or unsettled call.
+          checkpoint = { ...checkpoint, text:
+            'CLEAN_COMPACTION_MAX_TOKENS: The attempted summary was incomplete and discarded. Continue only from the verified mandatory facts below. Inspect the workspace before acting; do not repeat recorded side effects.' };
+          state.compactionFallback = 'max-tokens';
+          usedFallback = true;
+        }
         check();
-        if (!summary || summary.modelKey !== modelKey ||
-            summary.usedOnlyCleanInput !== true ||
-            typeof summary.text !== 'string' || !summary.text.trim() ||
-            checkpoint.text.length > this.compactAboveChars && summary.text.length >= checkpoint.text.length ||
-            summary.text.length + suffix.length > this.maxCheckpointChars)
-          throw new RecoveryStopped('INVALID_COMPACT_SUMMARY');
-        checkpoint = { ...checkpoint, text: summary.text };
+        if (!usedFallback) {
+          if (!summary || summary.modelKey !== modelKey ||
+              summary.usedOnlyCleanInput !== true ||
+              typeof summary.text !== 'string' || !summary.text.trim() ||
+              checkpoint.text.length > this.compactAboveChars && summary.text.length >= checkpoint.text.length ||
+              summary.text.length + suffix.length > this.maxCheckpointChars)
+            throw new RecoveryStopped('INVALID_COMPACT_SUMMARY');
+          checkpoint = { ...checkpoint, text: summary.text };
+        }
       }
       const finalCheckpoint = checkpoint.text + suffix;
       if (finalCheckpoint.length > this.maxCheckpointChars)

@@ -23,6 +23,7 @@ export async function createStatusStore(directory){
       if(typeof sessionId!=='string'||!sessionId||!states.has(value.state)||!value.episodeId)throw Error('INVALID_STATUS');
       const data={schema:1,episodeId:value.episodeId,state:value.state,updatedAt:Date.now()};
       for(const name of ['reason','childSessionId','requests','compactCalls'])if(value[name]!==undefined)data[name]=value[name];
+      if(value.compactionFallback==='max-tokens')data.compactionFallback='max-tokens';
       if(JSON.stringify(data).length>2048)throw Error('STATUS_TOO_LARGE');
       current.set(sessionId,data);
       const tail=(tails.get(sessionId)??Promise.resolve()).catch(()=>{}).then(async()=>{

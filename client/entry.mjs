@@ -22,6 +22,7 @@ window.__ModuleLoader__.load({
       'status.reason': '原因：{reason}',
       'status.requests': '恢复请求 {count}',
       'status.compactCalls': '交接整理 {count}',
+      'status.compactionFallback': '整理达到输出上限；已弃用半截摘要，改用已核验记录继续',
       'status.child': '查看恢复会话与结果',
       'status.stop': '停止恢复',
       'status.stopping': '正在请求停止…',
@@ -51,6 +52,13 @@ window.__ModuleLoader__.load({
       'reason.USER_IMAGE_LIMIT': '原任务中的图片超过安全交接上限，未启动新 Agent',
       'reason.USER_IMAGE_UNAVAILABLE': '无法核验原任务中的图片，未启动新 Agent',
       'reason.USER_IMAGE_HANDOFF_MISMATCH': '图片交接记录不一致，未启动新 Agent',
+      'reason.COMPACTION_INCOMPLETE': '整理上下文的模型请求未正常完成，未启动新 Agent',
+      'reason.COMPACTION_CALL_COUNT': '整理上下文的请求次数不符合安全规则，未启动新 Agent',
+      'reason.COMPACTION_MAX_TOKENS': '整理上下文达到输出上限，未使用不完整的摘要',
+      'reason.COMPACTION_PROVIDER_ERROR': '整理上下文时服务商报错，未启动新 Agent',
+      'reason.COMPACTION_ABORTED': '整理上下文的请求被中止，未启动新 Agent',
+      'reason.COMPACTION_UNEXPECTED_TOOL_CALL': '整理上下文时模型尝试调用工具，未启动新 Agent',
+      'reason.COMPACTION_NO_FINISH': '整理上下文的流没有完成信号，未启动新 Agent',
       'reason.TOOL_REPLAY_OR_UNIDENTIFIED': '已阻止可能重复的操作',
       'reason.SECOND_GUARD_CONFIRMATION': '恢复后再次检测到重复，已停止',
       'reason.HOST_RESTARTED': '应用重启，自动恢复未继续',
@@ -86,6 +94,7 @@ window.__ModuleLoader__.load({
       'status.reason': 'Reason: {reason}',
       'status.requests': 'Recovery requests {count}',
       'status.compactCalls': 'Compactions {count}',
+      'status.compactionFallback': 'Compaction reached its output limit; the partial summary was discarded and verified records were used',
       'status.child': 'View recovery session and result',
       'status.stop': 'Stop recovery',
       'status.stopping': 'Requesting stop…',
@@ -115,6 +124,13 @@ window.__ModuleLoader__.load({
       'reason.USER_IMAGE_LIMIT': 'The original task contains too many images for safe handoff; no new Agent was started',
       'reason.USER_IMAGE_UNAVAILABLE': 'An original user image could not be verified; no new Agent was started',
       'reason.USER_IMAGE_HANDOFF_MISMATCH': 'The image handoff record did not match; no new Agent was started',
+      'reason.COMPACTION_INCOMPLETE': 'The context compaction request did not finish normally; no new Agent was started',
+      'reason.COMPACTION_CALL_COUNT': 'The context compaction request count failed its safety check; no new Agent was started',
+      'reason.COMPACTION_MAX_TOKENS': 'Context compaction reached its output limit; its incomplete summary was discarded',
+      'reason.COMPACTION_PROVIDER_ERROR': 'The provider reported an error during context compaction; no new Agent was started',
+      'reason.COMPACTION_ABORTED': 'The context compaction request was aborted; no new Agent was started',
+      'reason.COMPACTION_UNEXPECTED_TOOL_CALL': 'The model attempted a tool call during context compaction; no new Agent was started',
+      'reason.COMPACTION_NO_FINISH': 'The context compaction stream had no finish event; no new Agent was started',
       'reason.TOOL_REPLAY_OR_UNIDENTIFIED': 'A possibly repeated operation was blocked',
       'reason.SECOND_GUARD_CONFIRMATION': 'Repetition was detected again after recovery; stopped',
       'reason.HOST_RESTARTED': 'The app restarted; automatic recovery did not continue',
@@ -144,6 +160,7 @@ window.__ModuleLoader__.load({
       if (id(d.childSessionId)) value.childSessionId = d.childSessionId;
       for (const key of ['requests', 'compactCalls'])
         if (Number.isSafeInteger(d[key]) && d[key] >= 0) value[key] = d[key];
+      if (d.compactionFallback === 'max-tokens') value.compactionFallback = 'max-tokens';
       return value;
     }
     function readEpisodes(value) {
@@ -260,6 +277,8 @@ window.__ModuleLoader__.load({
         if (data.requests !== undefined) counts.push(t('status.requests', {count: data.requests}));
         if (data.compactCalls !== undefined) counts.push(t('status.compactCalls', {count: data.compactCalls}));
         if (counts.length) children.push(h('div', {key: 'counts', style: style.text}, counts.join(' · ')));
+        if (data.compactionFallback === 'max-tokens') children.push(h('div',
+          {key: 'fallback', style: style.text}, t('status.compactionFallback')));
         const actions = [];
         if (data.childSessionId) actions.push(h('button', {key: 'child', type: 'button', style: style.button,
           onClick: () => ctx.uiWorkspace.openSession({childSessionId: data.childSessionId,

@@ -22,14 +22,14 @@ Rice Patrol 是 DeepSeek Harness（DSH）的“唱歌”拦截插件。“唱歌
 
 Recover 最多自动尝试一次。若后台工作或工具结果无法核对，它会停下来提示你，不会猜测结果。恢复完成或受阻后，可点“关闭提醒”；记录仍会保留。插件按钮和说明跟随 DSH 的界面语言（中文或英文）；DSH 没有手动指定语言时，会参考浏览器的系统语言偏好。模式保存后需重启 DSH Web 才生效，运行中的任务不会中途换模式。
 
-交接顺序是：先核对工具和后台任务，再从旧会话提取不含异常思考链的干净记录，**只压缩这份干净记录一次**，最后交给新 Agent。用户上传的图片会先核验，再通过 DSH 保存的图片引用交给新 Agent；compact 不接收图片内容。不会先压缩旧会话全文，也不会删除已经完成的文件修改。
+交接顺序是：先核对工具和后台任务，再从旧会话提取不含异常思考链的干净记录，**只压缩这份干净记录一次**，最后交给新 Agent。如果这次 compact 达到输出 token 上限，插件会丢弃半截摘要，只凭已核验的用户要求和操作记录交接。超时、服务商错误或没有完成信号时仍会暂停。用户上传的图片会先核验，再通过 DSH 保存的图片引用交给新 Agent；compact 不接收图片内容。不会先压缩旧会话全文，也不会删除已经完成的文件修改。
 
 ## 安装
 
 目前按 DSH `0.1.6-alpha.2` 测试。在终端运行：
 
 ```sh
-dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.4
+dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.5
 ```
 
 重启 DSH Web，在 **Plugins** 页面启用 rice-patrol **及其组件**，再到插件设置里选择模式。只安装插件、没有启用组件时，拦截不会工作。
@@ -42,4 +42,4 @@ dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.4
 - 不同模型和服务商的效果仍需分别验证。单纯的 **Output token limit reached** 不是本插件的检测对象。
 - 图片丢失、附件格式不受支持（包括文件附件）时，Recover 仍会暂停。已经暂停的旧恢复不会自动重试。
 
-v0.2.4 加入安全的图片交接和具体的暂停原因。已用这次中断时的会话记录只读检查交接构造；58 项本地测试通过，其中包含用合成图片走通 DSH AgentLoop 交接。这次修复没有调用真实模型。测试范围和细节见 [恢复验证记录](docs/RECOVERY_0_2_VALIDATION.md) 与 [早期 Web 验证记录](docs/VALIDATION.md)。项目使用 MIT 许可。
+v0.2.5 加入 compact 达到输出上限时的有界交接，并显示更具体的暂停原因。已只读检查这次 WeakDALearning 故障，但旧日志没有保存 compact 的准确结束类型，因此这里只修复一个有依据的可能原因，不能宣称已证实。60 项本地测试通过，其中包含合成 AgentLoop 的降级交接；本次没有调用真实模型。以前已暂停的恢复不会自动重试。测试范围和细节见 [恢复验证记录](docs/RECOVERY_0_2_VALIDATION.md) 与 [早期 Web 验证记录](docs/VALIDATION.md)。项目使用 MIT 许可。

@@ -59,6 +59,12 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
         finish(res);return;
       }
       if(kind==='compact'){
+        if(scenario==='compact-max-tokens'){
+          chunk(res,{type:'block-start',index:0,blockType:'text'});
+          chunk(res,{type:'text-delta',index:0,text:'INCOMPLETE_SYNTHETIC_SUMMARY'});
+          chunk(res,{type:'block-end',index:0,block:{type:'text',text:'INCOMPLETE_SYNTHETIC_SUMMARY'}});
+          chunk(res,{type:'finish',reason:{kind:'max-tokens'}});res.end();return;
+        }
         if(scenario==='user-stop'){
           chunk(res,{type:'block-start',index:0,blockType:'reasoning'});
           chunk(res,{type:'reasoning-delta',index:0,text:'Waiting for an explicit synthetic cancellation.\n'});return;
@@ -248,6 +254,18 @@ test('generic public API: clean compaction makes one call with the original rout
   assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','compact','child','child']);
   assert.equal(result.status.compactCalls,1);
   assert.ok(!JSON.stringify(result.stats.requests.find(request=>request.kind==='compact').payload.messages).includes('Let me try.'));
+});
+
+test('generic public API: token-capped compaction discards its partial text and resumes from verified facts',{timeout:10000},async()=>{
+  const result=await runScenario('compact-max-tokens');
+  assert.equal(result.status.state,'COMPLETED',JSON.stringify(result.status));
+  assert.equal(result.status.compactionFallback,'max-tokens');
+  assert.equal(result.stats.children.length,1);
+  assert.equal(result.stats.requests.filter(request=>request.kind==='compact').length,1);
+  const child=JSON.stringify(result.stats.requests.find(request=>request.kind==='child').payload.messages);
+  assert.ok(child.includes('CLEAN_COMPACTION_MAX_TOKENS'));
+  assert.ok(child.includes('mandatory-facts'));
+  assert.ok(!child.includes('INCOMPLETE_SYNTHETIC_SUMMARY'));
 });
 
 test('generic public API: host tool scope preserves ordinary recovery tools',{timeout:10000},async()=>{

@@ -178,10 +178,23 @@ test('known recovery reasons translate with DSH locale, and unknown codes use a 
   assert.ok(flatten(card.render()).some(x => x === 'Reason: The original task contains an unsupported attachment or content block; no new Agent was started'));
   f.setLocale('zh');
   assert.ok(flatten(card.render()).some(x => x === '原因：原任务包含暂不支持的附件或内容，未启动新 Agent'));
+  card.render({...element.props, data: episode('BLOCKED', {reason: 'COMPACTION_INCOMPLETE'})});
+  assert.ok(flatten(card.render()).some(x => x === '原因：整理上下文的模型请求未正常完成，未启动新 Agent'));
   f.setLocale('en');
+  assert.ok(flatten(card.render()).some(x => x === 'Reason: The context compaction request did not finish normally; no new Agent was started'));
   card.render({...element.props, data: episode('BLOCKED', {reason: 'NEW_UNRECOGNIZED_REASON'})});
   assert.ok(flatten(card.render()).some(x => x === 'Reason: Recovery paused. Inspect the recovery session or contact the maintainer'));
   card.unmount(); panel.unmount();
+});
+
+test('a completed deterministic fallback is explicitly shown in both interface languages',async()=>{
+  const f=fixture(ok([episode('COMPLETED',{compactionFallback:'max-tokens'})]));
+  const panel=f.mount(f.Panel,{sessionId:'parent-1'});panel.render();await tick();
+  const element=panel.render().children[0];const card=f.mount(element.type,element.props);
+  assert.ok(flatten(card.render()).some(x=>x==='整理达到输出上限；已弃用半截摘要，改用已核验记录继续'));
+  f.setLocale('en');
+  assert.ok(flatten(card.render()).some(x=>x==='Compaction reached its output limit; the partial summary was discarded and verified records were used'));
+  card.unmount();panel.unmount();
 });
 
 test('session switch drops old visible cards and aborts old polling; malformed payload cannot become a card', async () => {

@@ -22,14 +22,14 @@ Choose a mode in **Plugins → rice-patrol**:
 
 Recover makes at most one automatic attempt. If it cannot verify a background job or tool result, it pauses for you instead of guessing. Finished or blocked reminders have a dismiss button; their records remain. Buttons and explanations follow the DSH interface language (Chinese or English). When no language is explicitly selected in DSH, it uses the browser's system language preference. Changing mode requires a DSH Web restart and does not change an in-flight task.
 
-The handoff checks tools and background jobs first, extracts a clean record without the degenerate reasoning tail, **compacts that clean record once**, then starts a fresh Agent. Uploaded user images are checked and passed to that Agent through DSH's saved image references; the compaction call receives no image bytes. It does not compact the full old session or delete completed file edits.
+The handoff checks tools and background jobs first, extracts a clean record without the degenerate reasoning tail, **compacts that clean record once**, then starts a fresh Agent. If that one compaction reaches its output token limit, Rice Patrol discards the partial summary and continues from verified user and operation facts only. Timeouts, provider errors and unfinished streams still pause recovery. Uploaded user images are checked and passed to the new Agent through DSH's saved image references; the compaction call receives no image bytes. It does not compact the full old session or delete completed file edits.
 
 ## Install
 
 Tested with DSH `0.1.6-alpha.2`:
 
 ```sh
-dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.4
+dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.5
 ```
 
 Restart DSH Web, enable **both rice-patrol and its component** on the Plugins page, then choose a mode in its settings. Installing the package alone does not activate the guard.
@@ -42,4 +42,4 @@ Restart DSH Web, enable **both rice-patrol and its component** on the Plugins pa
 - Behavior still needs validation across models and providers. A plain **Output token limit reached** message is not a detection signal.
 - Recover still pauses if a user attachment is missing or uses an unsupported format, including file attachments. A previous paused recovery is not retried automatically.
 
-v0.2.4 adds safe image handoff and specific pause messages. The interrupted session was checked read-only against the new checkpoint builder; 58 local tests passed, including a synthetic DSH AgentLoop image handoff. No real model call was made for this fix. See the [recovery validation](docs/RECOVERY_0_2_VALIDATION.md) and [earlier Web validation](docs/VALIDATION.md) for test scope and technical details. MIT licensed.
+v0.2.5 adds a bounded fallback for token-capped compaction and clearer pause messages. The WeakDALearning incident was inspected read-only; its exact compaction finish reason was not retained, so this change addresses a plausible cause rather than claiming to prove it. 60 local tests passed, including a synthetic AgentLoop fallback. No real model call was made for this fix. A previously paused recovery will not restart automatically. See the [recovery validation](docs/RECOVERY_0_2_VALIDATION.md) and [earlier Web validation](docs/VALIDATION.md) for test scope and technical details. MIT licensed.
