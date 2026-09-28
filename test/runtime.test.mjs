@@ -21,7 +21,7 @@ async function until(predicate,ms=5000){
   throw Error('Synthetic scenario exceeded its finite deadline');
 }
 
-async function runScenario(scenario,{routes=[routeA],settings={},plain=false,initialRoute,image=false}={}){
+async function runScenario(scenario,{routes=[routeA],settings={},plain=false,initialRoute,image=false,repeatTurn=false}={}){
   const hostRuntime=await createHost(),{ctx,events}=hostRuntime;
   const directory=await mkdtemp(join(tmpdir(),'dsh-generic-runtime-'));
   const fibers=[],parents=[],responses=new Set(),rpcHandlers=new Map();
@@ -65,7 +65,7 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
           chunk(res,{type:'block-end',index:0,block:{type:'text',text:'INCOMPLETE_SYNTHETIC_SUMMARY'}});
           chunk(res,{type:'finish',reason:{kind:'max-tokens'}});res.end();return;
         }
-        if(scenario==='user-stop'){
+        if(scenario==='user-stop'&&number===1){
           chunk(res,{type:'block-start',index:0,blockType:'reasoning'});
           chunk(res,{type:'reasoning-delta',index:0,text:'Waiting for an explicit synthetic cancellation.\n'});return;
         }
@@ -142,7 +142,7 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
           mediaType:'image/png',bytes:4,width:1,height:1}}]:[])],source:{kind:'user'}}));
     }
     let stopAccepted=false,lastStatuses=[];
-    const statuses=plain?[]:await until(async()=>{
+    let statuses=plain?[]:await until(async()=>{
       const current=[];
       for(const parent of parents){
         const reply=await rpc('research-guard/status',{sessionId:parent.agent.session.id});
@@ -161,6 +161,21 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
       throw error;
     });
     await Promise.all(parents.map(parent=>parent.agent.whenIdle()));
+    if(repeatTurn){
+      assert.equal(plain,false);
+      assert.equal(routes.length,1);
+      assert.equal(statuses[0].state,scenario==='user-stop'?'INTERRUPTED':'COMPLETED');
+      const previousEpisode=statuses[0].episodeId;
+      parents[0].agent.followup(createUserMessage({content:[{type:'text',text:
+        'SYNTHETIC_TASK_0: Continue the same session in a new user turn. Do not repeat earlier tool operations.'}],
+        source:{kind:'user'}}));
+      statuses=await until(async()=>{
+        const reply=await rpc('research-guard/status',{sessionId:parents[0].agent.session.id});
+        const current=reply.value.episodes[0];
+        return current?.episodeId!==previousEpisode&&terminal.has(current?.state)?[current]:false;
+      });
+      await parents[0].agent.whenIdle();
+    }
     const parentEvents=parents.map(parent=>events.get(parent.agent.session.id)??[]);
     const childEvents=stats.children.map(child=>events.get(child.session.id)??[]);
     if(plain){
@@ -177,16 +192,16 @@ async function runScenario(scenario,{routes=[routeA],settings={},plain=false,ini
       assert.ok(parentEvents.every(log=>textOf(log)==='SYNTHETIC_FINISHED'));
     }else{
       if(scenario!=='ignores-abort')
-        await until(()=>stats.closes.filter(close=>close.kind==='parent'&&!close.natural).length===routes.length);
-      assert.equal(stats.requests.filter(request=>request.kind==='parent').length,2*routes.length);
+        await until(()=>stats.closes.filter(close=>close.kind==='parent'&&!close.natural).length===(repeatTurn?2:1)*routes.length);
+      assert.equal(stats.requests.filter(request=>request.kind==='parent').length,(repeatTurn?3:2)*routes.length);
       assert.equal(stats.counter,routes.length);
       for(const log of parentEvents)assert.deepEqual(endOf(log),
         {kind:'aborted',reason:{kind:'hook',reason:'reasoning-guard:REASONING_LOOP_CONFIRMED'}});
-      assert.ok(stats.children.length<=routes.length,'at most one fresh child per task');
-      assert.ok(stats.requests.length<=7*routes.length,'finite parent plus auxiliary plus child request budget');
+      assert.ok(stats.children.length<=(repeatTurn?2:1)*routes.length,'at most one fresh child per user turn');
+      assert.ok(stats.requests.length<=7*(repeatTurn?2:1)*routes.length,'finite parent plus auxiliary plus child request budget');
       for(const parent of parents)assert.equal(stats.streams.filter(stream=>
         stream.sessionId===parent.agent.session.id&&stream.purpose!=='compaction'&&stream.aborted).length,
-        scenario==='ignores-abort'?2:1);
+        scenario==='ignores-abort'?2:(repeatTurn?2:1));
     }
     assert.deepEqual(stats.errors,[],'no adapter, route, or AgentLoop errors');
     assert.ok(stats.prepared.length>=stats.requests.length,'requests pass the public prepareCall contract');
@@ -219,6 +234,23 @@ test('generic public API: AgentLoop cancels upstream and fresh same-route child 
   assert.equal(result.stats.record,1);assert.equal(result.stats.children.length,1);
   assert.deepEqual(result.stats.requests.map(request=>request.kind),['parent','parent','compact','child','child']);
   assert.equal(endOf(result.childEvents[0])?.kind,'completed');
+});
+
+test('generic public API: a later user turn in the same session receives a fresh automatic recovery',{timeout:10000},async()=>{
+  const result=await runScenario('normal',{repeatTurn:true});
+  assert.equal(result.status.state,'COMPLETED',JSON.stringify({status:result.status,
+    catalogs:result.parentEvents.filter(event=>event.type==='subagent/catalog').map(event=>event.data)}));
+  assert.equal(result.stats.children.length,2);
+  assert.equal(result.stats.requests.filter(request=>request.kind==='compact').length,2);
+  assert.equal(result.stats.record,1,'the completed side effect was not repeated');
+});
+
+test('generic public API: stopping one recovery does not disable later user turns',{timeout:10000},async()=>{
+  const result=await runScenario('user-stop',{repeatTurn:true});
+  assert.equal(result.stopAccepted,true);
+  assert.equal(result.status.state,'COMPLETED',JSON.stringify(result.status));
+  assert.equal(result.stats.children.length,1);
+  assert.equal(result.stats.requests.filter(request=>request.kind==='compact').length,2);
 });
 
 test('generic public API: recovery compacts text and passes a verified user image to one child',{timeout:10000},async()=>{

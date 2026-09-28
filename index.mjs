@@ -21,6 +21,20 @@ export const inject=['llm','tools','agents','subagents','connection','settings',
 const ModeSettings=z.object({mode:z.string().default('stop')});
 const endReason=agent=>agent.session.log.filter(e=>e.type==='turn/end').at(-1)?.data?.reason;
 const guardEnded=agent=>endReason(agent)?.reason?.reason==='reasoning-guard:REASONING_LOOP_CONFIRMED';
+const stoppedTurnId=agent=>{
+  const start=agent.session.log.filter(e=>e.type==='turn/start').at(-1);
+  const end=agent.session.log.filter(e=>e.type==='turn/end').at(-1);
+  // Tie the allowance to the latest explicit user input, not a host-created
+  // turn number. Automatic internal turns must not mint new recovery attempts.
+  const user=agent.session.log.filter(e=>e.type==='user/message'&&e.data?.source?.kind==='user').at(-1);
+  if(!Number.isSafeInteger(start?.seq)||start.seq<0||
+      !Number.isSafeInteger(end?.seq)||end.seq<=start.seq||
+      !Number.isSafeInteger(start.data?.turn)||start.data.turn<1||
+      end.data?.turn!==start.data.turn||
+      !Number.isSafeInteger(user?.seq)||user.seq<0||user.seq>=end.seq)
+    throw new RecoveryStopped('TURN_ID_UNAVAILABLE');
+  return String(user.seq);
+};
 const noInbox=agent=>!agent.inbox.nextTurn.length&&!agent.inbox.nextStep.length;
 const activeStates=new Set(['STOPPING','PREPARING','COMPACTING','RECOVERING']);
 export async function apply(ctx,raw){
@@ -141,6 +155,7 @@ export async function installRuntime(ctx,raw){
       if(parent.session.header.parentSession||active.has(parent.session.id)||disposed)return;
       const cleanup=new Promise(resolve=>cleanups.set(options,resolve));
       const record={taskId:parent.session.id,parent,episodeId:randomUUID(),state:'STOPPING',cleanup,
+        userRevision:recovery.revision(parent.session.id),
         controller:new AbortController(),provider:options.provider,model:options.model,effort:options.reasoningEffort};
       active.set(record.taskId,record);
       record.offIntent=interceptRecoveryIntent(parent,()=>interrupt(record));
@@ -160,6 +175,7 @@ export async function installRuntime(ctx,raw){
     if(!guardEnded(parent))throw new RecoveryStopped('STOP_NOT_SETTLED');
     if(cleanup!=='SETTLED')throw new RecoveryStopped('STREAM_CLEANUP_UNSETTLED');
     if(config.mode==='stop'){await publish(record,'STOPPED','REASONING_LOOP_CONFIRMED');return}
+    const turnId=stoppedTurnId(parent);
     await publish(record,'PREPARING');
     // Completed PTC calls are historical evidence, not active jobs. The host's
     // job registry reports work that can outlive the tool call which started it.
@@ -179,8 +195,8 @@ export async function installRuntime(ctx,raw){
     const initial=buildCleanCheckpoint(parent.session.log,checkpointOptions);
     const result=await parent.runMaintenance(parentSignal=>{
       const signal=AbortSignal.any([parentSignal,record.controller.signal]);
-      return recoverOnce({ledger,recovery,trigger:{taskId,modelKey,guardEpisodeId:episodeId,
-        reason:'guard-confirmed',parentSignal:signal,userRevision:0,completedOperationKeys:initial.completedOperationKeys},adapter:{
+      return recoverOnce({ledger,recovery,trigger:{taskId,turnId,modelKey,guardEpisodeId:episodeId,
+        reason:'guard-confirmed',parentSignal:signal,userRevision:record.userRevision,completedOperationKeys:initial.completedOperationKeys},adapter:{
         waitForStop:async({signal})=>{signal.throwIfAborted();return {guardCancelled:guardEnded(parent),turnClosed:noInbox(parent),
           toolsSettled:true,guardEpisodeId:episodeId,completedOperationKeys:initial.completedOperationKeys}},
         prepareCleanCheckpoint:async({signal})=>{

@@ -182,6 +182,11 @@ test('known recovery reasons translate with DSH locale, and unknown codes use a 
   assert.ok(flatten(card.render()).some(x => x === '原因：整理上下文的模型请求未正常完成，未启动新 Agent'));
   f.setLocale('en');
   assert.ok(flatten(card.render()).some(x => x === 'Reason: The context compaction request did not finish normally; no new Agent was started'));
+  card.render({...element.props, data: episode('BLOCKED', {reason: 'RECOVERY_ALREADY_USED_THIS_TURN'})});
+  assert.ok(flatten(card.render()).some(x => x === 'Reason: Recovery was already attempted in this turn; a later user turn can recover again'));
+  f.setLocale('zh');
+  assert.ok(flatten(card.render()).some(x => x === '原因：本轮对话已尝试恢复；下一轮用户消息可再次自动恢复'));
+  f.setLocale('en');
   card.render({...element.props, data: episode('BLOCKED', {reason: 'NEW_UNRECOGNIZED_REASON'})});
   assert.ok(flatten(card.render()).some(x => x === 'Reason: Recovery paused. Inspect the recovery session or contact the maintainer'));
   card.unmount(); panel.unmount();

@@ -235,6 +235,14 @@ function construct(events,{
       todoSnapshots.push({eventId:eventId(event),trust:'untrusted-model-plan',
         completionClaimsAreNotExecutionEvidence:true,sha256:sha(serialized),
         todos:data.todos.map(todo=>({...todo}))});
+    }else if(event.type==='subagent/catalog'){
+      // A completed Rice Patrol handoff leaves this parent-session metadata.
+      // It is not a tool result or user instruction. Other subagent catalogs
+      // remain unsupported because their work may need separate reconciliation.
+      if(data.version!==0||!identity(data.childId)||!positive(data.childCreatedAt)||
+          data.mode!=='one-shot'||data.label!=='Research Guard recovery'||
+          Object.keys(data).some(key=>!['version','childId','childCreatedAt','mode','label'].includes(key)))
+        fail('UNSUPPORTED_SESSION_EVENT');
     }else if(event.type==='agent/inbox/spliced'){
       if(data.target!=='next-turn'&&data.target!=='next-step')fail('INVALID_INBOX_STATE');
       const pending=inbox[data.target],removed=data.removedCount??0;

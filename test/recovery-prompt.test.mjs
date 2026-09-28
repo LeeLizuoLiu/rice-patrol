@@ -27,7 +27,7 @@ test('missing image store or failed verification stops before constructing a chi
 
 test('bounded recovery carries verified image handoff into its single resume',async()=>{
   const recovery=new BoundedRecovery({compactAboveChars:10000});
-  const trigger={taskId:'image-task',modelKey:'synthetic/model',guardEpisodeId:'guard-one',
+  const trigger={taskId:'image-task',turnId:'1',modelKey:'synthetic/model',guardEpisodeId:'guard-one',
     reason:'guard-confirmed',userRevision:0,completedOperationKeys:[]};
   const facts={userMessages:[{eventId:'session#2',messageId:'user',text:'Inspect the image.',
     images:[{contentIndex:1,attachmentId:ref.attachmentId,mediaType:ref.mediaType,bytes:ref.bytes}]}],

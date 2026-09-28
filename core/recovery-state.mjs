@@ -139,6 +139,8 @@ export class BoundedRecovery {
     return revision;
   }
 
+  revision(taskId) { return this.#userRevision.get(taskId) ?? 0; }
+
   // The live detector can call this immediately on a second confirmed loop.
   confirmGuardAgain(taskId) {
     const controller = this.#active.get(taskId);
@@ -150,20 +152,22 @@ export class BoundedRecovery {
   status(taskId) { return this.#tasks.get(taskId) ?? null; }
 
   async recover(trigger, adapter) {
-    const { taskId, modelKey, guardEpisodeId, reason, userRevision, parentSignal,
+    const { taskId, turnId, modelKey, guardEpisodeId, reason, userRevision, parentSignal,
       completedOperationKeys = [] } = trigger ?? {};
-    if (!taskId || !modelKey || !guardEpisodeId || reason !== 'guard-confirmed')
-      return { state: 'ineligible', reason: 'requires confirmed guard stop and stable task/model identity' };
-    if (this.#tasks.has(taskId)) return { ...this.#tasks.get(taskId), reason: 'recovery already consumed' };
+    if (!taskId || !turnId || !modelKey || !guardEpisodeId || reason !== 'guard-confirmed')
+      return { state: 'ineligible', reason: 'requires confirmed guard stop and stable task/turn/model identity' };
+    if (this.#active.has(taskId)) return { state: 'ineligible', reason: 'recovery already active' };
+    if (this.#tasks.get(taskId)?.turnId === turnId)
+      return { ...this.#tasks.get(taskId), reason: 'RECOVERY_ALREADY_USED_THIS_TURN' };
     if ((this.#userRevision.get(taskId) ?? 0) !== (userRevision ?? 0))
       return { state: 'user_interrupted', reason: 'newer user input exists' };
     for (const name of ['waitForStop', 'prepareCleanCheckpoint', 'resume']) {
       if (typeof adapter?.[name] !== 'function') throw new TypeError(`adapter.${name} is required`);
     }
     const state = { state: 'settling', compactCalls: 0, resumeCalls: 0,
-      resumeRequests: 0, resumeToolCalls: 0, modelKey, taskId, reason: null };
-    // Reserve once before the first await. A replacement Agent must share this
-    // taskId; otherwise the host has to persist/restore the ledger itself.
+      resumeRequests: 0, resumeToolCalls: 0, modelKey, taskId, turnId, reason: null };
+    // Reserve once per user turn before the first await. The durable ledger
+    // enforces the same boundary across host restarts.
     this.#tasks.set(taskId, state);
     const controller = new AbortController();
     this.#active.set(taskId, controller);

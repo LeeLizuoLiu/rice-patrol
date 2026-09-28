@@ -2,31 +2,37 @@ import {mkdir,open,readFile,writeFile,rename} from 'node:fs/promises';
 import {createHash,randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 
-// Crash-safe, content-free one-recovery-per-task reservation. A stale claim
-// deliberately blocks another attempt until a human reviews the task state.
+// Crash-safe, content-free one-recovery-per-turn reservation. A stale claim
+// blocks another attempt in the same turn, while a later user turn can recover.
 export function createRecoveryLedger(directory){
   if(typeof directory!=='string'||!directory)throw new TypeError('ledger directory required');
   const key=taskId=>{
     if(typeof taskId!=='string'||!taskId)throw new TypeError('taskId required');
     return createHash('sha256').update(taskId).digest('hex');
   };
+  const pathFor=(taskId,turnId)=>{
+    if(typeof turnId!=='string'||!turnId)throw new TypeError('turnId required');
+    return join(directory,`${createHash('sha256').update(taskId).update('\0').update(turnId).digest('hex')}.json`);
+  };
   return {
-    async claim(taskId,{modelKey,guardEpisodeId}={}){
+    async claim(taskId,{turnId,modelKey,guardEpisodeId}={}){
       if(!modelKey||!guardEpisodeId)throw new TypeError('model and guard episode required');
+      key(taskId);
       await mkdir(directory,{recursive:true,mode:0o700});
-      const path=join(directory,`${key(taskId)}.json`);
+      const path=pathFor(taskId,turnId);
       let handle;
       try{handle=await open(path,'wx',0o600)}catch(error){
         if(error?.code==='EEXIST')return {claimed:false,path};
         throw error;
       }
-      const entry={schema:1,task:key(taskId),modelKey,guardEpisodeId,state:'reserved',time:Date.now()};
+      const entry={schema:2,task:key(taskId),turnId,modelKey,guardEpisodeId,state:'reserved',time:Date.now()};
       try{await handle.writeFile(JSON.stringify(entry)+'\n');await handle.sync()}
       finally{await handle.close()}
       return {claimed:true,path};
     },
-    async finish(taskId,result){
-      const path=join(directory,`${key(taskId)}.json`);
+    async finish(taskId,turnId,result){
+      key(taskId);
+      const path=pathFor(taskId,turnId);
       const old=JSON.parse(await readFile(path,'utf8'));
       if(old.state!=='reserved')throw new Error('recovery ledger already terminal');
       const state=result?.state;
@@ -38,8 +44,9 @@ export function createRecoveryLedger(directory){
       await rename(tmp,path);
       return entry;
     },
-    async read(taskId){
-      try{return JSON.parse(await readFile(join(directory,`${key(taskId)}.json`),'utf8'))}
+    async read(taskId,turnId){
+      key(taskId);
+      try{return JSON.parse(await readFile(pathFor(taskId,turnId),'utf8'))}
       catch(error){if(error?.code==='ENOENT')return null;throw error}
     }
   };
@@ -47,12 +54,13 @@ export function createRecoveryLedger(directory){
 
 export async function recoverOnce({ledger,recovery,trigger,adapter}){
   if(!ledger?.claim||!ledger?.finish||!recovery?.recover)throw new TypeError('ledger and recovery required');
-  const reservation=await ledger.claim(trigger.taskId,{modelKey:trigger.modelKey,guardEpisodeId:trigger.guardEpisodeId});
-  if(!reservation.claimed)return {state:'ineligible',reason:'recovery already reserved or consumed'};
+  const reservation=await ledger.claim(trigger.taskId,{turnId:trigger.turnId,
+    modelKey:trigger.modelKey,guardEpisodeId:trigger.guardEpisodeId});
+  if(!reservation.claimed)return {state:'ineligible',reason:'RECOVERY_ALREADY_USED_THIS_TURN'};
   let result;
   try{result=await recovery.recover(trigger,adapter)}
   catch(error){result={state:'failed',reason:error?.code??'RECOVERY_EXCEPTION'}}
   // If this write fails, the reservation remains and future attempts fail closed.
-  await ledger.finish(trigger.taskId,result);
+  await ledger.finish(trigger.taskId,trigger.turnId,result);
   return result;
 }
