@@ -1,6 +1,6 @@
 {
   "name": "dsh-rice-patrol",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "private": true,
   "license": "MIT",
   "description": "Rice Patrol: bounded reasoning repetition guard and clean recovery for DeepSeek Harness",

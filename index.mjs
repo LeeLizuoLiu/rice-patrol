@@ -5,14 +5,12 @@ import z from '@deepseek-ai/schemastery';
 import * as guard from './core/plugin.mjs';
 import {BoundedRecovery,RecoveryStopped} from './core/recovery-state.mjs';
 import {createRecoveryLedger,recoverOnce} from './core/recovery-ledger.mjs';
-import {reconcileToolLedger} from './core/clean-checkpoint.mjs';
 import {commitDirectResume} from './core/direct-resume.mjs';
 import {interceptRecoveryIntent} from './core/recovery-host-controls.mjs';
-import {snapshotInbox,assertInboxUnchanged,parkedInboxIds,extendParkedInbox} from './core/recovery-inbox.mjs';
+import {snapshotInbox,assertInboxUnchanged,extendParkedInbox} from './core/recovery-inbox.mjs';
 import {createResumeReceipt} from './core/resume-receipt.mjs';
 import {installObserve} from './core/observe-plugin.mjs';
 import {createObserveLog} from './core/observe-log.mjs';
-import {createToolJournal} from './tool-journal.mjs';
 import {createStatusStore} from './status-store.mjs';
 import {registerGuardRpc} from './web-rpc.mjs';
 import {validateSettings} from './settings.mjs';
@@ -56,7 +54,7 @@ export async function installRuntime(ctx,raw){
   observer=installObserve(ctx,{provider,model,sink,externalDetector:true});
   const ledger=createRecoveryLedger(join(config.stateDirectory,'recovery'));
   const recovery=new BoundedRecovery(config);
-  const active=new Map(),held=new Map(),resumed=new Map(),jobs=new Set(),cleanups=new WeakMap();
+  const active=new Map(),held=new Map(),jobs=new Set(),cleanups=new WeakMap();
   let disposed=false;
   const publish=async(record,state,reason)=>{
     const data={episodeId:record.episodeId,state,
@@ -81,22 +79,8 @@ export async function installRuntime(ctx,raw){
       if(!removed)record.parent.cancel({kind:'hook',reason:`rice-patrol:${reason}`},{keepInbox:true});
     }
   };
-  // The main Agent has no request/tool-count budget. Keep exact completed
-  // side effects from the stopped turn out of its first resumed turn.
-  offs.push(ctx.on('tools/execute',async(exec,next)=>{
-    const entry=resumed.get(exec.agent?.session.id);
-    if(!entry)return next();
-    const reservation=await entry.journal.reserve({toolName:exec.name,arguments:exec.arguments,callId:exec.callId});
-    try{
-      const result=await next();
-      const saved=await entry.journal.settle(reservation,{isError:result.isError});
-      if(!saved.recorded&&!saved.skipped)entry.incomplete=true;
-      return result;
-    }catch(error){await entry.journal.settle(reservation,{isError:true});throw error}
-  }));
-  offs.push(ctx.on('session/event',(session,event)=>{
-    if(event.type==='turn/end')resumed.delete(session.id);
-  }));
+  // Direct resume leaves completed tool history in DSH. It does not inspect
+  // other plugins' tool payloads or intercept their future executions.
   offs.push(registerGuardRpc(ctx,
     async(endpoint,payload)=>{
       if(!['research-guard/status','research-guard/stop','research-guard/dismiss'].includes(endpoint))return {ok:false,error:{code:'gateway/not-found',message:'Unknown endpoint',details:{}}};
@@ -194,34 +178,20 @@ export async function installRuntime(ctx,raw){
         !['completed','killed','failed'].includes(job.status)||job.reported!==true))
         throw new RecoveryStopped('ACTIVE_OR_UNREPORTED_JOB');
     }
-    const checkpointOptions={sessionId:taskId,modelKey,guardEpisodeId:episodeId,turnSettled:true,toolsSettled:true,
-      recentHistory:true,maxRecentOperations:128,maxOperations:4096,maxContentChars:32_000_000,
-      maxUserChars:32_000_000,
-      parkedInbox:parkedInboxIds(parkedInbox)};
-    const initial=reconcileToolLedger(parent.session.log,checkpointOptions);
     const result=await parent.runMaintenance(parentSignal=>{
       const signal=AbortSignal.any([parentSignal,record.controller.signal]);
       return recoverOnce({ledger,recovery,trigger:{taskId,turnId,modelKey,guardEpisodeId:episodeId,
-        reason:'guard-confirmed',parentSignal:signal,userRevision:record.userRevision,completedOperationKeys:initial.completedOperationKeys},adapter:{
+        reason:'guard-confirmed',parentSignal:signal,userRevision:record.userRevision,completedOperationKeys:[]},adapter:{
         waitForStop:async({signal})=>{signal.throwIfAborted();if(record.inputChanged)throw new RecoveryStopped('PENDING_INPUT_CHANGED');
           assertInboxUnchanged(parent,parkedInbox);return {guardCancelled:guardEnded(parent),turnClosed:true,
-          toolsSettled:true,guardEpisodeId:episodeId,completedOperationKeys:initial.completedOperationKeys}},
+          toolsSettled:true,guardEpisodeId:episodeId,completedOperationKeys:[]}},
         resumeWithoutCompaction:async({signal})=>{
           if(record.inputChanged)throw new RecoveryStopped('PENDING_INPUT_CHANGED');
           assertInboxUnchanged(parent,parkedInbox);
-          const current=reconcileToolLedger(parent.session.log,checkpointOptions);
-          if(current.completedOperationKeys.length!==initial.completedOperationKeys.length||
-              current.completedOperationKeys.some((key,index)=>key!==initial.completedOperationKeys[index]))
-            throw new RecoveryStopped('TOOL_LEDGER_CHANGED');
           await publish(record,'RECOVERING');
-          const journal=await createToolJournal({directory:join(config.stateDirectory,'tools'),
-            taskId:episodeId,completedOperationKeys:initial.completedSideEffectKeys,
-            readOnlyTools:['read','glob','grep']});
-          resumed.set(taskId,{journal,incomplete:false});
           record.receipt=createResumeReceipt({ctx,agent:parent,signal:record.controller.signal,timeoutMs:config.resumeTimeoutMs});
-          try{return await commitDirectResume({ctx,parent,provider,model,signal,parkedInbox,
-            onResumeQueued:({messageId})=>{record.resumeMessageId=messageId;record.receipt.arm(messageId)}})}
-          catch(error){resumed.delete(taskId);throw error}
+          return commitDirectResume({ctx,parent,provider,model,signal,parkedInbox,
+            onResumeQueued:({messageId})=>{record.resumeMessageId=messageId;record.receipt.arm(messageId)}});
         }
       }});
     });
