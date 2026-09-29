@@ -1,8 +1,8 @@
 import {mkdir,readFile,writeFile,rename,stat} from 'node:fs/promises';
 import {createHash,randomUUID} from 'node:crypto';
 import {join} from 'node:path';
-const states=new Set(['STOPPING','PREPARING','COMPACTING','RECOVERING','COMPLETED','FAILED','STOPPED','INTERRUPTED','BLOCKED','OBSERVED']);
-const active=new Set(['STOPPING','PREPARING','COMPACTING','RECOVERING']);
+const states=new Set(['STOPPING','PREPARING','COMPACTING','RECOVERING','WAITING_RESUME','COMPLETED','FAILED','STOPPED','INTERRUPTED','BLOCKED','OBSERVED']);
+const active=new Set(['STOPPING','PREPARING','COMPACTING','RECOVERING','WAITING_RESUME']);
 const key=id=>createHash('sha256').update(id).digest('hex');
 export async function createStatusStore(directory){
   await mkdir(directory,{recursive:true,mode:0o700});

@@ -1,6 +1,6 @@
 {
   "name": "dsh-rice-patrol",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
   "license": "MIT",
   "description": "Rice Patrol: bounded reasoning repetition guard and clean recovery for DeepSeek Harness",
@@ -20,6 +20,7 @@
     "cordis.patch.yml",
     "README.md",
     "README.zh-CN.md",
+    "docs/SINGLE_AGENT_RECOVERY.md",
     "config/*.yml",
     "client/entry.mjs",
     "web-rpc.mjs"

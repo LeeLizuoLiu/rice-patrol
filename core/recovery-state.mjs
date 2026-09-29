@@ -159,7 +159,10 @@ export class BoundedRecovery {
       return { ...this.#tasks.get(taskId), reason: 'RECOVERY_ALREADY_USED_THIS_TURN' };
     if ((this.#userRevision.get(taskId) ?? 0) !== (userRevision ?? 0))
       return { state: 'user_interrupted', reason: 'newer user input exists' };
-    for (const name of ['waitForStop', 'prepareCleanCheckpoint', 'resume']) {
+    const required = adapter?.resumeWithoutCompaction
+      ? ['waitForStop', 'resumeWithoutCompaction']
+      : ['waitForStop', 'prepareCleanCheckpoint', 'resume'];
+    for (const name of required) {
       if (typeof adapter?.[name] !== 'function') throw new TypeError(`adapter.${name} is required`);
     }
     const state = { state: 'settling', compactCalls: 0, resumeCalls: 0,
@@ -192,6 +195,20 @@ export class BoundedRecovery {
       if (!sameKeys(settled.completedOperationKeys, completedOperationKeys))
         throw new RecoveryStopped('TOOL_LEDGER_INCOMPLETE');
 
+      if (typeof adapter.resumeWithoutCompaction === 'function') {
+        state.state = 'resuming';
+        state.resumeCalls++;
+        const result = await withBudget(signal => adapter.resumeWithoutCompaction({
+          taskId, modelKey, guardEpisodeId, signal,
+          completedOperationKeys: [...completedOperationKeys]
+        }), controller, this.resumeTimeoutMs, 'resume');
+        check();
+        if (!result?.mainAgent || !result?.handoffCommitted || result?.modelKey !== modelKey)
+          throw new RecoveryStopped('MAIN_HANDOFF_NOT_COMMITTED');
+        state.state = 'completed';
+        return { ...state };
+      }
+
       // Build this from trusted task facts, never by replaying the cancelled
       // transcript. DSH compactNow() retains a recent tail and is unsafe here.
       state.state = 'preparing';
@@ -211,27 +228,37 @@ export class BoundedRecovery {
       const handoffImages=verifiedHandoffImages(checkpoint.mandatoryFacts,checkpoint.handoffImages??[]);
       if (suffix.length >= this.maxCheckpointChars)
         throw new RecoveryStopped('MANDATORY_FACTS_TOO_LARGE');
-      if (this.alwaysCompact || checkpoint.text.length > this.compactAboveChars) {
+      const regional=checkpoint.olderHistoryText!==undefined||checkpoint.retainedRecentText!==undefined;
+      if(regional&&(typeof checkpoint.olderHistoryText!=='string'||
+          typeof checkpoint.retainedRecentText!=='string'||!checkpoint.retainedRecentText||
+          checkpoint.olderHistoryText.length+checkpoint.retainedRecentText.length>this.maxCleanInputChars))
+        throw new RecoveryStopped('INVALID_CHECKPOINT');
+      const olderText=regional?checkpoint.olderHistoryText:checkpoint.text;
+      const retainedText=regional?checkpoint.retainedRecentText:'';
+      let olderForHandoff=olderText;
+      if (olderText&&(this.alwaysCompact || olderText.length > this.compactAboveChars)) {
         if (typeof adapter.compactCleanInput !== 'function')
           throw new RecoveryStopped('COMPACTION_REQUIRED');
-        // Optional one-shot same-model summary, fed ONLY the clean checkpoint.
-        // The adapter must route it through its own bounded auxiliary call.
+        // Summarize only older evidence. The recent working set and mandatory
+        // facts are kept verbatim outside the auxiliary model call.
+        const maxSummaryChars=Math.min(3000,this.maxCheckpointChars-suffix.length-retainedText.length-128);
+        if(maxSummaryChars<1)throw new RecoveryStopped('CHECKPOINT_TOO_LARGE');
         state.state = 'compacting';
         state.compactCalls++;
         const summary = await withBudget(signal => adapter.compactCleanInput({
-          taskId, modelKey, cleanInput: checkpoint.text, signal,
-          maxChars: this.maxCheckpointChars - suffix.length
+          taskId, modelKey, cleanInput: olderText, signal,
+          maxChars: maxSummaryChars
         }), controller, this.compactTimeoutMs, 'compact');
         check();
         if (!summary || summary.modelKey !== modelKey ||
             summary.usedOnlyCleanInput !== true ||
             typeof summary.text !== 'string' || !summary.text.trim() ||
-            checkpoint.text.length > this.compactAboveChars && summary.text.length >= checkpoint.text.length ||
-            summary.text.length + suffix.length > this.maxCheckpointChars)
+            olderText.length > this.compactAboveChars && summary.text.length >= olderText.length ||
+            summary.text.length > maxSummaryChars)
           throw new RecoveryStopped('INVALID_COMPACT_SUMMARY');
-        checkpoint = { ...checkpoint, text: summary.text };
+        olderForHandoff=regional?`<untrusted-older-history-summary>\n${summary.text}\n</untrusted-older-history-summary>`:summary.text;
       }
-      const finalCheckpoint = checkpoint.text + suffix;
+      const finalCheckpoint = [olderForHandoff,retainedText].filter(Boolean).join('\n\n') + suffix;
       if (finalCheckpoint.length > this.maxCheckpointChars)
         throw new RecoveryStopped('CHECKPOINT_TOO_LARGE');
       state.state = 'resuming';

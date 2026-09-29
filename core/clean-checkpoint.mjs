@@ -77,7 +77,15 @@ const SKIPPABLE=new Set([
   'sandbox/mode','permission/preset','approval/asked','approval/decided','approval/policy',
   'llm/retry','llm/retry-started','agent-preset/selected','plan/mode',
   'workspace/changes','deliverables/presented',
+  // Search plugin request telemetry; the corresponding tool result remains
+  // separately recorded and is the only task evidence used by the handoff.
+  'web/deepseek-search-llm-request',
 ]);
+// These host commands change session policy or presentation state. Their
+// settled lifecycle can be retained as historical metadata; neither the
+// checkpoint nor the resumed Agent re-executes them. Unknown commands may
+// have external effects and require explicit reconciliation.
+const RECONCILABLE_COMMANDS=new Set(['permission','plan']);
 
 /**
  * Construct a checkpoint only after the caller has awaited host/tool idle and
@@ -95,7 +103,7 @@ function construct(events,{
   maxCleanInputChars=64_000,maxMandatoryChars=12_000,maxUserChars=8_000,
   maxToolEvidenceChars=2_000,maxArgumentExcerptChars=600,
   maxEvents=20_000,maxOperations=128,maxContentChars=8_000_000,
-  recentHistory=false,maxRecentOperations=128,
+  recentHistory=false,maxRecentOperations=128,parkedInbox=null,
 }={},ledgerOnly=false) {
   for(const limit of [maxCleanInputChars,maxMandatoryChars,maxUserChars,maxToolEvidenceChars,
     maxArgumentExcerptChars,maxEvents,maxOperations,maxContentChars,maxRecentOperations])if(!positive(limit))throw new TypeError('checkpoint limits must be positive integers');
@@ -104,6 +112,7 @@ function construct(events,{
   if(!Array.isArray(events)||!events.length||events.length>maxEvents)fail('CHECKPOINT_EVENT_LIMIT');
   const users=[],handoffImages=[],operations=[],recentOperations=[],operationKeys=new Set(),sideEffectKeys=new Set(),evidence=[],assistantProgress=[],native=new Map(),ptc=new Map();
   const surface=[],compactions=[],todoSnapshots=[],compactionIds=new Set(),commands=new Map();
+  const settledCommands=[],delegatedChildren=[];
   let systemSurfaceSeq;
   let compaction=null;
   const inbox={'next-turn':[],'next-step':[]};
@@ -175,6 +184,21 @@ function construct(events,{
         surface.splice(index,1,event.seq);systemSurfaceSeq=event.seq;
         continue;
       }
+      if(event.type==='user/message'&&isObject(op)&&op.op==='replace'&&
+          data.source?.kind==='plugin'&&data.source?.plugin==='dsh-rice-patrol'){
+        const last=surface.at(-1);
+        const target=events.find(item=>item.seq===last);
+        if(last===undefined||op.startSeq!==last||op.endSeq!==last||
+            !sameSeqs(event.sourceEventSeqs,[last])||
+            target?.type!=='assistant/message'||target.data?.interrupted!==true||
+            !Array.isArray(target.data.message?.content)||
+            !target.data.message.content.some(block=>block?.type==='reasoning')||
+            data.role!=='user'||!identity(data.id)||!Array.isArray(data.content)||
+            data.content.length!==1||data.content[0]?.type!=='text'||
+            typeof data.content[0].text!=='string')fail('INVALID_GUARD_TAIL_REWRITE');
+        surface.splice(surface.length-1,1,event.seq);
+        continue;
+      }
       if(event.type!=='user/message'||!isObject(op)||op.op!=='replace'||
         data.source?.kind!=='plugin'||data.source?.plugin!=='compact')fail('UNSUPPORTED_SURFACE_REWRITE');
       if(!compaction?.summary||compaction.replacement||data.source.compactionId!==compaction.id||
@@ -191,16 +215,23 @@ function construct(events,{
       compaction.replacement=event;
     }
     if(event.type==='command/run'){
-      if(event.surfaceOp!==undefined||data.name!=='compact'||!identity(data.commandId)||
+      if(event.surfaceOp!==undefined||!identity(data.name)||!identity(data.commandId)||
         commands.has(data.commandId)||data.source?.kind!=='user')fail('UNSUPPORTED_SESSION_EVENT');
+      if(data.name!=='compact'&&!RECONCILABLE_COMMANDS.has(data.name))fail('UNRECONCILED_COMMAND');
       commands.set(data.commandId,{run:event});
     }else if(event.type==='command/done'){
       const command=commands.get(data.commandId);
-      if(event.surfaceOp!==undefined||!command||command.done||data.kind!=='success'||
-        !Number.isSafeInteger(data.sourceEventSeq)||
-        !compactions.some(item=>item.summarySeq===data.sourceEventSeq&&item.sourceCommandId===data.commandId))
+      if(event.surfaceOp!==undefined||!command||command.done||!['success','error'].includes(data.kind))
         fail('UNSUPPORTED_SESSION_EVENT');
+      if(command.run.data.name==='compact'){
+        if(data.kind!=='success'||!Number.isSafeInteger(data.sourceEventSeq)||
+          !compactions.some(item=>item.summarySeq===data.sourceEventSeq&&item.sourceCommandId===data.commandId))
+          fail('UNSUPPORTED_SESSION_EVENT');
+      }else if(data.sourceEventSeq!==undefined)fail('UNSUPPORTED_SESSION_EVENT');
       command.done=event;
+      if(command.run.data.name!=='compact')settledCommands.push({name:command.run.data.name,
+        runEventId:eventId(command.run),doneEventId:eventId(event),outcome:data.kind,
+        argsSha256:sha(command.run.data.args??''),notReplayed:true});
     }else if(event.type==='compaction/start'){
       if(compaction||!identity(data.compactionId)||compactionIds.has(data.compactionId)||
         data.turn!==openTurn)fail('INVALID_COMPACTION_PROVENANCE');
@@ -236,13 +267,15 @@ function construct(events,{
         completionClaimsAreNotExecutionEvidence:true,sha256:sha(serialized),
         todos:data.todos.map(todo=>({...todo}))});
     }else if(event.type==='subagent/catalog'){
-      // A completed Rice Patrol handoff leaves this parent-session metadata.
-      // It is not a tool result or user instruction. Other subagent catalogs
-      // remain unsupported because their work may need separate reconciliation.
+      // A catalog is a delegation record, never evidence of completion. Child
+      // results remain in their own session or the parent's durable inbox.
       if(data.version!==0||!identity(data.childId)||!positive(data.childCreatedAt)||
-          data.mode!=='one-shot'||data.label!=='Research Guard recovery'||
+          !['one-shot','continuable'].includes(data.mode)||!identity(data.label)||
           Object.keys(data).some(key=>!['version','childId','childCreatedAt','mode','label'].includes(key)))
         fail('UNSUPPORTED_SESSION_EVENT');
+      if(delegatedChildren.some(child=>child.childId===data.childId))fail('UNSUPPORTED_SESSION_EVENT');
+      delegatedChildren.push({childId:data.childId,mode:data.mode,
+        label:data.label,status:'unknown; inspect child session before assigning more work'});
     }else if(event.type==='agent/inbox/spliced'){
       if(data.target!=='next-turn'&&data.target!=='next-step')fail('INVALID_INBOX_STATE');
       const pending=inbox[data.target],removed=data.removedCount??0;
@@ -348,9 +381,14 @@ function construct(events,{
     }
   }
   if(compaction)fail('COMPACTION_NOT_COMMITTED');
-  if([...commands.values()].some(command=>!command.done))fail('UNSUPPORTED_SESSION_EVENT');
+  if([...commands.values()].some(command=>!command.done))fail('COMMAND_NOT_SETTLED');
   if(!ledgerOnly&&(openTurn!==null||openStep!==null))fail('STOP_NOT_SETTLED');
-  if(inbox['next-turn'].length||inbox['next-step'].length)fail('PENDING_USER_INPUT');
+  if(parkedInbox!==null){
+    for(const target of ['next-turn','next-step']){
+      if(!Array.isArray(parkedInbox[target])||parkedInbox[target].some(id=>!identity(id))||
+        JSON.stringify(inbox[target])!==JSON.stringify(parkedInbox[target]))fail('PENDING_INPUT_CHANGED');
+    }
+  }else if(inbox['next-turn'].length||inbox['next-step'].length)fail('PENDING_USER_INPUT');
   if([...native.values(),...ptc.values()].some(call=>!call.resultEvent))fail('TOOL_NOT_SETTLED');
   // Sort using original event order, including nested PTC records.
   operations.sort((a,b)=>(native.get(a.toolId)??ptc.get(a.toolId)).event.seq-(native.get(b.toolId)??ptc.get(b.toolId)).event.seq);
@@ -377,6 +415,8 @@ function construct(events,{
     generatedSummariesExcluded:true,originalLogRetained:true,
   }:undefined;
   const mandatoryFacts={userMessages:users,completedOperations:promptOperations,
+    ...(settledCommands.length?{settledHostCommands:settledCommands}:{}),
+    ...(delegatedChildren.length?{delegatedChildren}:{}),
     ...(operationLedger?{completedOperationLedger:operationLedger}:{}),
     ...(recentOperationWindow?{recentOperationWindow}:{}),
     ...(historicalCompactionLedger?{historicalCompactionLedger}:{}),constraints:{
@@ -391,12 +431,32 @@ function construct(events,{
   if(serializedFacts.length>maxMandatoryChars)fail('MANDATORY_FACTS_TOO_LARGE');
   const payload={schema:'dsh-clean-checkpoint/v1',mandatoryFacts,
     untrustedToolEvidence:evidence,
-    ...(todoSnapshots.length?{untrustedTodoSnapshots:recentHistory?todoSnapshots.slice(-1):todoSnapshots}:{}),
+    ...(todoSnapshots.length?{untrustedTodoSnapshots:recentHistory?todoSnapshots.slice(-8):todoSnapshots}:{}),
     ...(assistantProgress.length?{untrustedAssistantProgress:assistantProgress}:{})};
   const text=canonical(payload,{maxChars:maxContentChars});
   if(text.length>maxCleanInputChars)fail('CLEAN_INPUT_TOO_LARGE');
+  // As in a regional compaction, keep the newest bounded working set intact.
+  // The auxiliary model only sees older, untrusted evidence; exact user
+  // instructions and the operation ledger bypass it in mandatoryFacts.
+  const oldEvidence=evidence.slice(0,Math.max(0,evidence.length-4));
+  const recentEvidence=evidence.slice(-4);
+  const oldProgress=assistantProgress.slice(0,Math.max(0,assistantProgress.length-2));
+  const recentProgress=assistantProgress.slice(-2);
+  const olderTodos=recentHistory?todoSnapshots.slice(-8,-1):todoSnapshots.slice(0,-1);
+  const olderHistoryText=oldEvidence.length||oldProgress.length||olderTodos.length?canonical({
+    schema:'dsh-older-evidence/v1',
+    untrustedToolEvidence:oldEvidence,
+    untrustedAssistantProgress:oldProgress,
+    untrustedTodoSnapshots:olderTodos,
+  },{maxChars:maxContentChars}):'';
+  const retainedRecentText=canonical({schema:'dsh-recent-evidence/v1',
+    untrustedToolEvidence:recentEvidence,
+    untrustedAssistantProgress:recentProgress,
+    ...(todoSnapshots.length?{untrustedTodoSnapshot:todoSnapshots.at(-1)}:{}),
+  },{maxChars:maxContentChars});
   return {modelKey,excludedGuardTail:true,provenance:'deterministic-clean',sourceEpisodeId:guardEpisodeId,
-    text,mandatoryFacts,handoffImages,completedOperationKeys,completedSideEffectKeys:[...sideEffectKeys],taskFingerprint:sha(serializedFacts),
+    text,olderHistoryText,retainedRecentText,mandatoryFacts,handoffImages,completedOperationKeys,
+    completedSideEffectKeys:[...sideEffectKeys],taskFingerprint:sha(serializedFacts),
     reasoningIncluded:false,toolStateKnown:true,sourceEventCount:events.length};
 }
 

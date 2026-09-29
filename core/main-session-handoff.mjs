@@ -2,11 +2,13 @@ import {randomUUID} from 'node:crypto';
 import {createUserMessage} from '@deepseek-ai/dsh-llm';
 import {compactCheckpointSource,toolPairingBalancedAfter,toolPairingBalancedBefore} from '@deepseek-ai/dsh-compaction';
 import {RecoveryStopped} from './recovery-state.mjs';
+import {assertInboxUnchanged,snapshotInbox} from './recovery-inbox.mjs';
 
 // Called inside the parent's idle maintenance phase, after the auxiliary
 // summary has finished. This is a model-visible surface replacement, not a
 // follow-up containing a summary on top of the old reasoning tail.
-export async function commitMainSessionHandoff({ctx,parent,checkpoint,images=[],provider,model,signal}){
+export async function commitMainSessionHandoff({ctx,parent,checkpoint,images=[],provider,model,signal,
+  parkedInbox=snapshotInbox(parent),onResumeQueued=()=>{}}){
   signal?.throwIfAborted();
   const session=parent.session;
   const nodes=[...session.surface.nodes];
@@ -17,8 +19,7 @@ export async function commitMainSessionHandoff({ctx,parent,checkpoint,images=[],
   const start=shadowedSeqs[0],end=shadowedSeqs.at(-1);
   if(!toolPairingBalancedBefore(session,start)||!toolPairingBalancedAfter(session,end))
     throw new RecoveryStopped('HANDOFF_UNBALANCED_TOOLS');
-  if(parent.inbox.nextTurn.length||parent.inbox.nextStep.length)
-    throw new RecoveryStopped('USER_INTERRUPTED');
+  assertInboxUnchanged(parent,parkedInbox);
   const meter=ctx.get('tokenMeter');
   if(!meter?.measure||!meter?.estimateMessage)
     throw new RecoveryStopped('TOKEN_METER_UNAVAILABLE');
@@ -56,10 +57,15 @@ export async function commitMainSessionHandoff({ctx,parent,checkpoint,images=[],
   }
   await ctx.sessions.flush(session);
   signal?.throwIfAborted();
-  if(parent.inbox.nextTurn.length||parent.inbox.nextStep.length)
-    throw new RecoveryStopped('USER_INTERRUPTED');
-  parent.followup(createUserMessage({content:[{type:'text',text:
-    'Rice Patrol has completed a clean checkpoint for this stopped turn. Resume the unfinished user task from the checkpoint in this session. Inspect current workspace state before any side effect; do not repeat recorded completed operations.'}],
-    source:{kind:'plugin',plugin:'dsh-rice-patrol'}}));
-  return {mainAgent:true,modelKey:`${provider}/${model}`,handoffCommitted:true};
+  assertInboxUnchanged(parent,parkedInbox);
+  const continuation=createUserMessage({content:[{type:'text',text:
+    'Rice Patrol has completed a clean checkpoint for this stopped turn. Resume from that checkpoint. Preserve the authority of queued user instructions; they may change or replace the previous task. Inspect current workspace state before any side effect; do not repeat recorded completed operations.'}],
+    source:{kind:'plugin',plugin:'dsh-rice-patrol'}});
+  onResumeQueued({messageId:continuation.id,compactionId});
+  // Steering is consumed together with the host's next queued user message.
+  // Appending another ordinary follow-up would add a stale extra user turn.
+  if(parkedInbox.nextTurn.length||parkedInbox.nextStep.length)parent.steer(continuation);
+  else parent.followup(continuation);
+  return {mainAgent:true,modelKey:`${provider}/${model}`,handoffCommitted:true,
+    compactionId,resumeMessageId:continuation.id};
 }
