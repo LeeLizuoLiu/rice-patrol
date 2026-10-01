@@ -156,7 +156,7 @@ export class BoundedRecovery {
       return { state: 'ineligible', reason: 'requires confirmed guard stop and stable task/turn/model identity' };
     if (this.#active.has(taskId)) return { state: 'ineligible', reason: 'recovery already active' };
     if (this.#tasks.get(taskId)?.turnId === turnId)
-      return { ...this.#tasks.get(taskId), reason: 'RECOVERY_ALREADY_USED_THIS_TURN' };
+      return { state: 'ineligible', reason: 'RECOVERY_ALREADY_HANDLED_THIS_STOP' };
     if ((this.#userRevision.get(taskId) ?? 0) !== (userRevision ?? 0))
       return { state: 'user_interrupted', reason: 'newer user input exists' };
     const required = adapter?.resumeWithoutCompaction
@@ -167,8 +167,8 @@ export class BoundedRecovery {
     }
     const state = { state: 'settling', compactCalls: 0, resumeCalls: 0,
       modelKey, taskId, turnId, reason: null };
-    // Reserve once per user turn before the first await. The durable ledger
-    // enforces the same boundary across host restarts.
+    // Reserve this stopped generation before the first await. Later stops in
+    // the same user task receive distinct identities and may recover again.
     this.#tasks.set(taskId, state);
     const controller = new AbortController();
     this.#active.set(taskId, controller);

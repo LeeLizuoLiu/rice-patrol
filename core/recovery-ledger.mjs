@@ -2,8 +2,8 @@ import {mkdir,open,readFile,writeFile,rename} from 'node:fs/promises';
 import {createHash,randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 
-// Crash-safe, content-free one-recovery-per-turn reservation. A stale claim
-// blocks another attempt in the same turn, while a later user turn can recover.
+// Crash-safe, content-free deduplication of one stopped generation. Later
+// stopped generations can recover without requiring a new user message.
 export function createRecoveryLedger(directory){
   if(typeof directory!=='string'||!directory)throw new TypeError('ledger directory required');
   const key=taskId=>{
@@ -25,7 +25,7 @@ export function createRecoveryLedger(directory){
         if(error?.code==='EEXIST')return {claimed:false,path};
         throw error;
       }
-      const entry={schema:2,task:key(taskId),turnId,modelKey,guardEpisodeId,state:'reserved',time:Date.now()};
+      const entry={schema:3,task:key(taskId),turnId,modelKey,guardEpisodeId,state:'reserved',time:Date.now()};
       try{await handle.writeFile(JSON.stringify(entry)+'\n');await handle.sync()}
       finally{await handle.close()}
       return {claimed:true,path};
@@ -56,7 +56,7 @@ export async function recoverOnce({ledger,recovery,trigger,adapter}){
   if(!ledger?.claim||!ledger?.finish||!recovery?.recover)throw new TypeError('ledger and recovery required');
   const reservation=await ledger.claim(trigger.taskId,{turnId:trigger.turnId,
     modelKey:trigger.modelKey,guardEpisodeId:trigger.guardEpisodeId});
-  if(!reservation.claimed)return {state:'ineligible',reason:'RECOVERY_ALREADY_USED_THIS_TURN'};
+  if(!reservation.claimed)return {state:'ineligible',reason:'RECOVERY_ALREADY_HANDLED_THIS_STOP'};
   let result;
   try{result=await recovery.recover(trigger,adapter)}
   catch(error){result={state:'failed',reason:error?.code??'RECOVERY_EXCEPTION'}}

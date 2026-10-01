@@ -20,7 +20,7 @@ Choose a mode in **Plugins → rice-patrol**:
 | **Observe** | Record the signal without stopping the task. |
 | **Recover** | Stop the current request, remove its interrupted reasoning from model-visible history, then resume the same Agent. |
 
-Recover makes at most one automatic attempt **per user turn**. A later user turn in the same session can recover again if repetition recurs. If the resumed Agent repeats in the same user turn, it stops instead of restarting indefinitely. If the host still reports active background work, it pauses for you. Finished or blocked reminders have a dismiss button; their records remain. Buttons and explanations follow the DSH interface language (Chinese or English). When no language is explicitly selected in DSH, it uses the browser's system language preference. Changing mode requires a DSH Web restart and does not change an in-flight task.
+Recover attempts recovery **each time repetition is confirmed**. The same session and user task can resume repeatedly without another user message or a completed tool step. A normal task completion does not start another turn. A user stop or new instruction interrupts the current recovery. Each stopped generation gets only one handoff to prevent duplicate starts. If the host still reports active background work, it pauses for you. Finished or blocked reminders have a dismiss button; their records remain. Buttons and explanations follow the DSH interface language (Chinese or English). When no language is explicitly selected in DSH, it uses the browser's system language preference. Changing mode requires a DSH Web restart and does not change an in-flight task.
 
 The handoff waits for the host to stop the current generation and checks for active host background jobs. It then replaces only the interrupted reasoning message in the model-visible history with a short notice; the original event remains in DSH's log. The same Agent continues from its earlier conversation. Rice Patrol makes no auxiliary summary call, does not parse other plugins' tool history, and does not intercept later tool calls. DSH's normal automatic compaction may still run later if context pressure requires it. Completed file edits remain in the workspace.
 
@@ -33,7 +33,7 @@ Input already queued when recovery begins stays in the host inbox in its origina
 Built for DSH `0.1.6-alpha.2`:
 
 ```sh
-dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.9
+dsh plugin --profile web add github:LeeLizuoLiu/rice-patrol#v0.2.10
 ```
 
 Restart DSH Web, enable **both rice-patrol and its component** on the Plugins page, then choose a mode in its settings. Installing the package alone does not activate the guard.
@@ -55,3 +55,5 @@ v0.2.7 replaces the child task runner with a checkpoint written to the original 
 v0.2.8 keeps the normal DSH conversation, shadows only the interrupted reasoning message, and resumes the same Agent without an auxiliary summary call. It also reconciles settled `/permission` and `/plan` records without rerunning them and parks child reports during recovery. The local package was installed, but this direct-resume path was not tested before publication at the user's request.
 
 v0.2.9 removes per-tool history parsing and the post-resume tool interception from Recover. As requested, this change was not tested before installation. DSH Web must be restarted before it takes effect.
+
+v0.2.10 removes the one-recovery-per-user-turn limit. Deduplication applies only to the same stopped generation; later confirmed loops can recover again. Old user-turn reservations do not block new handoffs. As requested, this change was not tested.

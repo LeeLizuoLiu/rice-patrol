@@ -22,16 +22,14 @@ const guardEnded=agent=>endReason(agent)?.reason?.reason==='reasoning-guard:REAS
 const stoppedTurnId=agent=>{
   const start=agent.session.log.filter(e=>e.type==='turn/start').at(-1);
   const end=agent.session.log.filter(e=>e.type==='turn/end').at(-1);
-  // Tie the allowance to the latest explicit user input, not a host-created
-  // turn number. Automatic internal turns must not mint new recovery attempts.
-  const user=agent.session.log.filter(e=>e.type==='user/message'&&e.data?.source?.kind==='user').at(-1);
+  // Deduplicate this stopped generation only. A later guard stop, including
+  // one in an automatically resumed turn, receives its own recovery.
   if(!Number.isSafeInteger(start?.seq)||start.seq<0||
       !Number.isSafeInteger(end?.seq)||end.seq<=start.seq||
       !Number.isSafeInteger(start.data?.turn)||start.data.turn<1||
-      end.data?.turn!==start.data.turn||
-      !Number.isSafeInteger(user?.seq)||user.seq<0||user.seq>=end.seq)
+      end.data?.turn!==start.data.turn)
     throw new RecoveryStopped('TURN_ID_UNAVAILABLE');
-  return String(user.seq);
+  return `guard-stop:${start.seq}:${end.seq}`;
 };
 const activeStates=new Set(['STOPPING','PREPARING','COMPACTING','RECOVERING','WAITING_RESUME']);
 export async function apply(ctx,raw){
