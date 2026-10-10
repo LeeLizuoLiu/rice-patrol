@@ -49,15 +49,20 @@ test('settled tool errors remain recorded as uncertain work instead of blocking 
   assert.ok(checkpoint.completedSideEffectKeys.includes(keys[1]));
 });
 
-test('a prior Rice Patrol child catalog is metadata; other subagent catalogs still block handoff',()=>{
+test('subagent catalogs are delegation metadata, not completion evidence',()=>{
   const {events}=completedHistory(0);
   const catalog={seq:events.at(-1).seq+1,type:'subagent/catalog',data:{version:0,
     childId:'synthetic-child',childCreatedAt:1,mode:'one-shot',label:'Research Guard recovery'}};
   const options={sessionId:'synthetic-history',modelKey:'synthetic-model',
     guardEpisodeId:'synthetic-episode',turnSettled:true,toolsSettled:true,recentHistory:true};
   assert.ok(buildCleanCheckpoint([...events,catalog],options).text);
+  const checkpoint=buildCleanCheckpoint([...events,{...catalog,data:{...catalog.data,
+    label:'unrelated subagent'}}],options);
+  assert.ok(checkpoint.text);
+  assert.equal(checkpoint.mandatoryFacts.delegatedChildren[0].status,
+    'unknown; inspect child session before assigning more work');
   assert.throws(()=>buildCleanCheckpoint([...events,{...catalog,data:{...catalog.data,
-    label:'unrelated subagent'}}],options),error=>error.code==='UNSUPPORTED_SESSION_EVENT');
+    childId:''}}],options),error=>error.code==='UNSUPPORTED_SESSION_EVENT');
 });
 
 test('clean checkpoint preserves a user image by durable reference without copying interrupted reasoning',()=>{

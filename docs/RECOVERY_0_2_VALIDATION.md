@@ -1,5 +1,7 @@
 # Recover 0.2 local validation
 
+> Historical validation notes. For the current automatic recovery contract and checks, see [AUTOMATIC_RECOVERY_VALIDATION.md](AUTOMATIC_RECOVERY_VALIDATION.md).
+
 The current change has **not** made a new real provider call or run a new full DSH Web scenario. The earlier isolated Web evidence in `VALIDATION.md` belongs to the previous release.
 
 - `npm test`: 50/50 pass with loopback synthetic adapters. The added cases cover eviction at operation 129, preservation of older replay fingerprints, settled tool errors, and the host tool scope for a recovered child.

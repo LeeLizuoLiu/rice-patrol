@@ -1,5 +1,4 @@
-# UI enablement starts stop mode. Its state directory defaults beneath
-# DSH_HOME (or ~/.dsh); the Web settings card can select observe or recover.
+# Enabling Rice Patrol always stops confirmed reasoning loops and resumes the same task.
 - insert:
     - id: rice-patrol
       name: dsh-rice-patrol

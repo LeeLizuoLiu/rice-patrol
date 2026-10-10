@@ -95,27 +95,16 @@ const ok = episodes => ({ok: true, value: {schema: 1, episodes}});
 const episode = (state, extra = {}) => ({schema: 1, episodeId: 'episode-1', state, ...extra});
 const flatten = tree => Array.isArray(tree) ? tree.flatMap(flatten) : !tree || typeof tree !== 'object' ? [tree] : [tree, ...(tree.children ?? []).flatMap(flatten)];
 
-test('mode card offers three choices and saves only the selected mode in DSH settings', async () => {
-  const f = fixture(ok([]));
-  const element = f.SettingsPage({view: 'page'});
-  const page = f.mount(element.type, element.props);
-  let tree = page.render();
-  let select = flatten(tree).find(x => x?.type === 'select');
-  assert.deepEqual(flatten(select).filter(x => x?.type === 'option').map(x => x.props.value),
-    ['observe', 'stop', 'recover']);
-  assert.equal(select.props.value, 'recover');
-  await select.props.onChange({target: {value: 'stop'}});
-  tree = page.render(); select = flatten(tree).find(x => x?.type === 'select');
-  assert.equal(select.props.value, 'stop');
-  assert.deepEqual(f.settingsWrites, [{field: 'mode', value: 'stop'}]);
-  assert.ok(flatten(tree).some(x => typeof x === 'string' && x.includes('重启 DSH Web')));
-  f.setLocale('en');
-  tree = page.render();
-  assert.equal(tree.props['aria-label'], 'Rice Patrol settings');
-  assert.ok(flatten(tree).some(x => x === 'Response mode'));
-  assert.ok(flatten(tree).some(x => x === 'Stop: interrupt confirmed repetition'));
-  assert.ok(flatten(tree).some(x => typeof x === 'string' && x.includes('Restart DSH Web')));
-  page.unmount();
+test('recovery information has no mode controls or settings writes in either language', () => {
+  const f=fixture(ok([]));
+  const element=f.SettingsPage({view:'page'});
+  const page=f.mount(element.type,element.props);
+  for(const locale of ['zh','en']) {
+    f.setLocale(locale);const tree=page.render();
+    assert.equal(flatten(tree).some(x=>x?.type==='select'||x?.type==='option'),false);
+    assert.ok(flatten(tree).some(x=>typeof x==='string'&&x.includes(locale==='zh'?'自动截断':'resumes the task')));
+  }
+  assert.deepEqual(f.settingsWrites,[]);page.unmount();
 });
 
 test('polls only sidecar RPC, one card per episode, stops exact session/episode, navigates native one-shot child', async () => {

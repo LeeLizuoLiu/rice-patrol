@@ -1,8 +1,7 @@
-# Experimental: use the triggering request's resolved provider/model/effort.
+# Always recover using the triggering request's resolved provider/model/effort.
 - id: rice-patrol
   disabled: false
   config:
-    mode: recover
     provider: '*'
     model: '*'
     stateDirectory: /absolute/path/to/research-guard-state

@@ -1,4 +1,5 @@
 export function validateConfig(raw = {}) {
+  raw = Object.fromEntries(Object.entries(raw).filter(([key]) => !key.startsWith('ngram')));
   const c = { mode: 'observe', provider: '*', model: '*', callType: 'agent', cancellation: null,
     windowLines: 50, maxMedian: 20, minRepeat: 0.7,
     requestDeadlineMs: null, maxReasoningBytes: null,

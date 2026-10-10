@@ -21,7 +21,7 @@ export function interceptRecoveryIntent(agent,onInterrupt,{onPark=()=>{},onBefor
         // host's actual cancel or prompt. The host action runs exactly once.
         if(user){try{onInterrupt(name==='cancel'?'USER_STOPPED':'NEW_USER_INPUT')}catch{}}
         if(name==='send'&&args[2]===true&&!user&&
-          !(args[0]?.source?.kind==='plugin'&&args[0].source.plugin==='dsh-rice-patrol')){
+          !(args[0]?.source?.kind==='plugin:dsh-rice-patrol')){
           // A background result may arrive after the stopped turn but before
           // maintenance owns the Agent. Keep its original durable inbox item
           // without starting another turn; the clean handoff will wake once.

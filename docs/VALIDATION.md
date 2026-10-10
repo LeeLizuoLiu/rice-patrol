@@ -1,5 +1,7 @@
 # Validation of v0.1.0
 
+> Historical validation notes. For the current automatic recovery contract and checks, see [AUTOMATIC_RECOVERY_VALIDATION.md](AUTOMATIC_RECOVERY_VALIDATION.md).
+
 Tested on DeepSeek Harness `0.1.6-alpha.2`, Node `26.7.0`.
 
 - 47/47 current local tests passed. They cover public DSH stream/turn cancellation, wildcard or exact provider/model filters, request correlation across retries, cleanup settlement, bounded recovery, operation journal, status RPC, the recovery UI, and the three-mode settings card.

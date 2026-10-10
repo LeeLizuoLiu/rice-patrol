@@ -1,7 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {mkdir} from 'node:fs/promises';
 import {join} from 'node:path';
-import z from '@deepseek-ai/schemastery';
 import * as guard from './core/plugin.mjs';
 import {BoundedRecovery,RecoveryStopped} from './core/recovery-state.mjs';
 import {createRecoveryLedger,recoverOnce} from './core/recovery-ledger.mjs';
@@ -9,14 +8,11 @@ import {commitDirectResume} from './core/direct-resume.mjs';
 import {interceptRecoveryIntent} from './core/recovery-host-controls.mjs';
 import {snapshotInbox,assertInboxUnchanged,extendParkedInbox} from './core/recovery-inbox.mjs';
 import {createResumeReceipt} from './core/resume-receipt.mjs';
-import {installObserve} from './core/observe-plugin.mjs';
-import {createObserveLog} from './core/observe-log.mjs';
 import {createStatusStore} from './status-store.mjs';
 import {registerGuardRpc} from './web-rpc.mjs';
 import {validateSettings} from './settings.mjs';
 export const name='dsh-rice-patrol';
 export const inject=['llm','tools','agents','sessions','tokenMeter','connection','settings','jobs'];
-const ModeSettings=z.object({mode:z.string().default('stop')});
 const endReason=agent=>agent.session.log.filter(e=>e.type==='turn/end').at(-1)?.data?.reason;
 const guardEnded=agent=>endReason(agent)?.reason?.reason==='reasoning-guard:REASONING_LOOP_CONFIRMED';
 const stoppedTurnId=agent=>{
@@ -33,23 +29,15 @@ const stoppedTurnId=agent=>{
 };
 const activeStates=new Set(['STOPPING','PREPARING','COMPACTING','RECOVERING','WAITING_RESUME']);
 export async function apply(ctx,raw){
-  const base=validateSettings(raw);
-  // User choices are stored in DSH's settings document. A mode change applies
-  // on the next host start, so in-flight turns keep their original guard.
-  const scope=ctx.settings.register('rice-patrol',ModeSettings,{base:{mode:base.mode},
-    applies:'restart',validate:value=>{if(!['observe','stop','recover'].includes(value.mode))throw Error('invalid guard mode')}});
-  const config=validateSettings({...base,mode:scope.get().mode});
-  const runtime=await installRuntime(ctx,config);
+  const runtime=await installRuntime(ctx,raw);
   ctx.effect(()=>async()=>{await runtime.dispose()},'research guard shutdown');
 }
 export async function installRuntime(ctx,raw){
   const config=validateSettings(raw),{provider,model}=config;
   await mkdir(config.stateDirectory,{recursive:true,mode:0o700});
-  let observer,sink;const offs=[];
+  const offs=[];
   try{
   const status=await createStatusStore(join(config.stateDirectory,'status'));
-  sink=createObserveLog(join(config.stateDirectory,`events-${randomUUID()}.jsonl`));
-  observer=installObserve(ctx,{provider,model,sink,externalDetector:true});
   const ledger=createRecoveryLedger(join(config.stateDirectory,'recovery'));
   const recovery=new BoundedRecovery(config);
   const active=new Map(),held=new Map(),jobs=new Set(),cleanups=new WeakMap();
@@ -60,7 +48,6 @@ export async function installRuntime(ctx,raw){
       ...(recovery.status(record.taskId)?{compactCalls:recovery.status(record.taskId).compactCalls}:{})};
     record.state=state;
     await status.set(record.taskId,data);
-    sink.record('RECOVERY_STAGE',{reason:state});
   };
   const interrupt=(record,reason='USER_STOPPED')=>{
     if(record.interrupted)return;
@@ -95,19 +82,13 @@ export async function installRuntime(ctx,raw){
       if(accepted)interrupt(record);
       return {ok:true,value:{accepted}};
     }));
-  const offGuard=guard.apply(ctx,{provider,model,mode:config.mode==='observe'?'observe':'enforce',
-    cancellation:config.mode==='observe'?null:'host-turn'},
+  const offGuard=guard.apply(ctx,{provider,model,mode:'enforce',cancellation:'host-turn'},
     {onEvent:(event,options)=>{
-      observer.recordGuardEvent(event,options);
       if(event.status==='STREAM_CLEANUP'){
         cleanups.get(options)?.(event.reason);cleanups.delete(options);return;
       }
       if(!['CONFIRMED','TERMINATED'].includes(event.status))return;
       const parent=ctx.agents.get(options.sessionId);if(!parent)return;
-      if(config.mode==='observe'){
-        if(event.status==='CONFIRMED')void status.set(parent.session.id,{episodeId:randomUUID(),state:'OBSERVED',reason:'REPETITION_CONFIRMED'}).catch(()=>{});
-        return;
-      }
       if(event.status!=='TERMINATED'||event.reason!=='REASONING_LOOP_CONFIRMED')return;
       // UI branches also have parentSession. Only delegated subagents are
       // excluded; a user-created branch remains an ordinary recovery root.
@@ -160,7 +141,6 @@ export async function installRuntime(ctx,raw){
     if(record.interrupted)throw new RecoveryStopped(record.interruptReason);
     if(!guardEnded(parent))throw new RecoveryStopped('STOP_NOT_SETTLED');
     if(cleanup!=='SETTLED')throw new RecoveryStopped('STREAM_CLEANUP_UNSETTLED');
-    if(config.mode==='stop'){await publish(record,'STOPPED','REASONING_LOOP_CONFIRMED');return}
     const parkedInbox=record.parkedInbox=snapshotInbox(parent);
     const turnId=stoppedTurnId(parent);
     await publish(record,'PREPARING');
@@ -210,6 +190,6 @@ export async function installRuntime(ctx,raw){
     async dispose(){if(disposed)return;disposed=true;for(const r of active.values())interrupt(r,'HOST_SHUTDOWN');
       for(const r of held.values())r.offIntent();held.clear();
       await Promise.allSettled([...jobs]);offGuard();for(const off of offs.reverse())await off();
-      await observer.dispose();await status.flush();},config};
-  }catch(error){for(const off of offs.reverse()){try{off()}catch{}}try{await observer?.dispose()}catch{}try{await sink?.close()}catch{}throw error}
+      await status.flush();},config};
+  }catch(error){for(const off of offs.reverse()){try{off()}catch{}}throw error}
 }

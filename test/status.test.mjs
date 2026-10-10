@@ -31,10 +31,14 @@ test('terminal reminder dismissal is exact and survives restart without deleting
   assert.equal((await createStatusStore(dir).then(next=>next.get('session-a'))).dismissed,true);
  }finally{await rm(dir,{recursive:true,force:true})}
 });
-test('default stop has no new request deadline; retired child limits are ignored',()=>{
- const cfg=validateSettings({stateDirectory:'/tmp/example'});assert.equal(cfg.mode,'stop');assert.equal(cfg.requestDeadlineMs,undefined);
+test('automatic recovery is fixed; old modes and retired limits cannot override it',()=>{
+ const cfg=validateSettings({stateDirectory:'/tmp/example'});assert.equal(cfg.mode,'recover');assert.equal(cfg.requestDeadlineMs,undefined);
  assert.equal(cfg.alwaysCompact,true);
  assert.equal(cfg.maxResumeRequests,undefined);assert.equal(cfg.maxResumeToolCalls,undefined);
  const old=validateSettings({stateDirectory:'/tmp/example',maxResumeRequests:16,maxResumeToolCalls:128,recoveryTools:'host'});
  assert.equal(old.maxResumeRequests,undefined);assert.equal(old.recoveryTools,undefined);
+ for(const mode of ['observe','stop','recover','off',null,{get:()=> 'stop'}]) {
+   assert.equal(validateSettings({mode}).mode,'recover');
+ }
+ assert.equal(validateSettings({ngramObservation:true}).ngramObservation,undefined);
 });

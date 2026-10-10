@@ -6,8 +6,6 @@ import {createGuardedStream} from '../core/controller.mjs';
 import {validateConfig} from '../core/config.mjs';
 import {matchesRoute} from '../core/route.mjs';
 import {validateSettings} from '../settings.mjs';
-import {installObserve} from '../core/observe-plugin.mjs';
-import * as guard from '../core/plugin.mjs';
 
 const loop='OK.\n'.repeat(100);
 const finish={type:'finish',reason:{kind:'stop'}};
@@ -166,107 +164,4 @@ test('ordinary finish passes through with settled cleanup and no active cancella
   assert.deepEqual(await collect(stream),output);assert.deepEqual(cancel,[]);
   assert.deepEqual(events.filter(e=>e.status==='STREAM_CLEANUP').map(e=>e.reason),['SETTLED']);
   assert.equal(events.some(e=>e.status==='TERMINATED'),false);
-});
-
-test('external detector records one confirmation per request across arbitrary routes',async()=>{
-  const h=harness(),observer=installObserve(h.ctx,{sink:h.sink,externalDetector:true});
-  assert.equal(h.handlers.get('llm/stream').length,1,'observer does not install a second detector');
-  const offGuard=guard.apply(h.ctx,{mode:'observe'},{onEvent:observer.recordGuardEvent});
-  try{
-    for(const [sessionId,provider,model] of [['a','vendor-a','model-a'],['b','vendor-b','model-b']]){
-      const options=await h.request({sessionId,provider,model});
-      const input=[{type:'reasoning-delta',text:loop},{type:'text-delta',text:'PRIVATE_SYNTHETIC_VISIBLE'},finish];
-      assert.deepEqual(await h.stream(options,input),input);
-      h.event(sessionId,'step/end',{turn:1,step:1});
-      h.event(sessionId,'turn/end',{turn:1,reason:{kind:'completed'}});
-    }
-    const starts=h.rows.filter(row=>row.type==='REQUEST_START');
-    assert.deepEqual(starts.map(row=>[row.provider,row.model]),[['vendor-a','model-a'],['vendor-b','model-b']]);
-    const confirmed=h.rows.filter(row=>row.type==='CONFIRMED');
-    assert.equal(confirmed.length,2);assert.equal(h.rows.filter(row=>row.type==='WARNING').length,2);
-    assert.equal(new Set(confirmed.map(row=>row.request)).size,2);
-    assert.ok(confirmed.every(row=>row.attempt&&starts.some(start=>start.request===row.request)));
-    assert.equal(JSON.stringify(h.rows).includes('PRIVATE_SYNTHETIC_VISIBLE'),false);
-    assert.equal(JSON.stringify(h.rows).includes('OK.\n'),false);
-    assert.deepEqual(observer.activeCounts(),{steps:0,turns:0});
-  }finally{offGuard();await observer.dispose()}
-});
-
-test('observer retry admission reuses turn signal but assigns each request a distinct attempt',async()=>{
-  const h=harness(),observer=installObserve(h.ctx,{sink:h.sink,externalDetector:true}),ac=new AbortController();
-  try{
-    const first=await h.request({signal:ac.signal});
-    await h.stream(first,[{type:'finish',reason:{kind:'error'}}]);
-    h.event('session-a','llm/retry',{turn:1,step:1,delayMs:0});
-    const retry=await h.request({signal:ac.signal});
-    await h.stream(retry,[finish]);
-    h.event('session-a','step/end',{turn:1,step:1});
-    h.event('session-a','turn/end',{turn:1,reason:{kind:'completed'}});
-    const starts=h.rows.filter(row=>row.type==='REQUEST_START'),attempts=h.rows.filter(row=>row.type==='ATTEMPT_START');
-    assert.equal(starts.length,2);assert.equal(attempts.length,2);
-    assert.equal(new Set(starts.map(row=>row.request)).size,2);
-    assert.equal(new Set(attempts.map(row=>row.attempt)).size,2);
-    assert.deepEqual(attempts.map(row=>row.request),starts.map(row=>row.request));
-    assert.deepEqual(observer.activeCounts(),{steps:0,turns:0});
-  }finally{await observer.dispose()}
-});
-
-test('observer reports the actual stream route when an outer request hook changes model selection',async()=>{
-  const h=harness();
-  h.ctx.on('agent/request',async(_payload,next)=>({...await next(),provider:'actual-provider',model:'actual-model'}));
-  const observer=installObserve(h.ctx,{sink:h.sink,externalDetector:true});
-  try{
-    const options=await h.request({provider:'initial-provider',model:'initial-model'});
-    assert.equal(options.provider,'actual-provider');
-    await h.stream(options,[finish]);
-    const start=h.rows.find(row=>row.type==='REQUEST_START');
-    assert.deepEqual([start.provider,start.model],['actual-provider','actual-model']);
-  }finally{await observer.dispose()}
-});
-
-test('observer exact filters follow final route after an outer request hook switches provider',async()=>{
-  const h=harness();
-  h.ctx.on('agent/request',async(_payload,next)=>({...await next(),provider:'actual-provider',model:'actual-model'}));
-  const observer=installObserve(h.ctx,{provider:'actual-provider',model:'actual-model',sink:h.sink,externalDetector:true});
-  try{
-    const options=await h.request({provider:'initial-provider',model:'initial-model'});
-    await h.stream(options,[finish]);
-    assert.equal(h.rows.filter(row=>row.type==='REQUEST_START').length,1);
-    assert.equal(h.rows.filter(row=>row.type==='ATTEMPT_START').length,1);
-    assert.equal(h.rows.filter(row=>row.type==='OBSERVE_GAP').length,0);
-  }finally{await observer.dispose()}
-});
-
-test('observer excludes requests switched away from its configured provider',async()=>{
-  const h=harness();
-  h.ctx.on('agent/request',async(_payload,next)=>({...await next(),provider:'other-provider',model:'other-model'}));
-  const observer=installObserve(h.ctx,{provider:'initial-provider',model:'initial-model',sink:h.sink,externalDetector:true});
-  try{
-    const options=await h.request({provider:'initial-provider',model:'initial-model'});
-    await h.stream(options,[finish]);
-    assert.equal(h.rows.filter(row=>row.type==='REQUEST_START').length,0);
-    assert.equal(h.rows.filter(row=>row.type==='ATTEMPT_START').length,0);
-    assert.equal(h.rows.filter(row=>row.type==='OBSERVE_GAP').length,0);
-  }finally{await observer.dispose()}
-});
-
-test('excluded-provider retry cannot attach its tool events to an earlier selected request',async()=>{
-  const h=harness(),observer=installObserve(h.ctx,{provider:'selected-provider',sink:h.sink,externalDetector:true});
-  const signal=new AbortController().signal;
-  try{
-    const selected=await h.request({provider:'selected-provider',signal});
-    await h.stream(selected,[{type:'finish',reason:{kind:'error'}}]);
-    h.event('session-a','assistant/attempt',{turn:1,step:1},1);
-    h.event('session-a','llm/retry',{turn:1,step:1,delayMs:0},2);
-    const excluded=await h.request({provider:'excluded-provider',signal});
-    await h.stream(excluded,[finish]);
-    h.event('session-a','tool/call',{turn:1,step:1,callId:'excluded-provider-tool'},3);
-    h.event('session-a','assistant/message',{turn:1,step:1},4);
-    h.event('session-a','step/end',{turn:1,step:1},5);
-    h.event('session-a','turn/end',{turn:1,reason:{kind:'completed'}},6);
-    assert.equal(h.rows.filter(row=>row.type==='REQUEST_START').length,1);
-    assert.equal(h.rows.filter(row=>row.type==='HOST_TOOL_COMMIT').length,0);
-    assert.equal(h.rows.filter(row=>row.type==='ASSISTANT_SETTLEMENT').length,1);
-    assert.deepEqual(observer.activeCounts(),{steps:0,turns:0});
-  }finally{await observer.dispose()}
 });

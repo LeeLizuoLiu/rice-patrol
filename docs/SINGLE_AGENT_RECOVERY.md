@@ -1,5 +1,7 @@
 # 单 Agent 恢复：本地修复与验证
 
+> Historical validation notes. For the current automatic recovery contract and checks, see [AUTOMATIC_RECOVERY_VALIDATION.md](AUTOMATIC_RECOVERY_VALIDATION.md).
+
 > 历史记录：本文件的压缩与测试结果属于 v0.2.7 候选流程。v0.2.8 改为移走本次中断的模型可见消息并直接接续；这条新路径发布前未运行测试，以下结果不能作为它的验证证据。
 
 > v0.2.10 当前规则：每次确认唱歌都可在同一会话恢复，不再按用户消息限制次数，也不要求两次恢复之间先完成工具步骤。只对同一次停止去重。任务正常结束不会触发接续，用户停止或新指令仍会中断恢复。下文“每个用户回合最多一次”属于旧版本。本次修改按用户要求未运行测试。

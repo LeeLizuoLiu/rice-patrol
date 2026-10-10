@@ -1,17 +1,18 @@
 {
   "name": "dsh-rice-patrol",
-  "version": "0.2.10",
+  "version": "0.2.11-desktopcompat.1",
   "private": true,
   "license": "MIT",
   "description": "Rice Patrol: bounded reasoning repetition guard and clean recovery for DeepSeek Harness",
   "type": "module",
-  "main": "index.mjs",
+  "main": "./desktop-entry.mjs",
   "exports": {
-    ".": "./index.mjs",
+    ".": "./desktop-entry.mjs",
     "./client": "./client/entry.mjs",
     "./package.json": "./package.json"
   },
   "files": [
+    "desktop-entry.mjs",
     "index.mjs",
     "settings.mjs",
     "status-store.mjs",
@@ -48,8 +49,8 @@
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-compaction": "0.1.6-alpha.2",
-    "@deepseek-ai/dsh-llm": "0.1.6-alpha.2",
+    "@deepseek-ai/dsh-compaction": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
     "@deepseek-ai/schemastery": "^3.18.2"
   }
 }

@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createRecoveryLedger,recoverOnce} from '../core/recovery-ledger.mjs';
 
-test('one recovery per turn survives a restart while later turns in the same session can recover',async()=>{
+test('duplicate stops stay deduplicated across restart; a later stopped generation can recover',async()=>{
   const directory=await mkdtemp(join(tmpdir(),'rice-patrol-turn-ledger-'));
   try{
     const sessionId='same-session';
@@ -21,7 +21,7 @@ test('one recovery per turn survives a restart while later turns in the same ses
     ledger=createRecoveryLedger(directory);
     const same=await recoverOnce({ledger,recovery,trigger:{...trigger('10'),guardEpisodeId:'new-random-episode'}});
     assert.equal(same.state,'ineligible');
-    assert.equal(same.reason,'RECOVERY_ALREADY_USED_THIS_TURN');
+    assert.equal(same.reason,'RECOVERY_ALREADY_HANDLED_THIS_STOP');
     assert.equal((await recoverOnce({ledger,recovery,trigger:trigger('20')})).state,'completed');
     assert.equal(calls,2);
     assert.equal((await ledger.read(sessionId,'10')).state,'completed');

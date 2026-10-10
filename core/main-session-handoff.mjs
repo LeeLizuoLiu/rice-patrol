@@ -60,7 +60,7 @@ export async function commitMainSessionHandoff({ctx,parent,checkpoint,images=[],
   assertInboxUnchanged(parent,parkedInbox);
   const continuation=createUserMessage({content:[{type:'text',text:
     'Rice Patrol has completed a clean checkpoint for this stopped turn. Resume from that checkpoint. Preserve the authority of queued user instructions; they may change or replace the previous task. Inspect current workspace state before any side effect; do not repeat recorded completed operations.'}],
-    source:{kind:'plugin',plugin:'dsh-rice-patrol'}});
+    source:{kind:'plugin:dsh-rice-patrol'}});
   onResumeQueued({messageId:continuation.id,compactionId});
   // Steering is consumed together with the host's next queued user message.
   // Appending another ordinary follow-up would add a stale extra user turn.
