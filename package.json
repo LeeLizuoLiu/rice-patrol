@@ -49,8 +49,8 @@
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-compaction": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-compaction": ">=0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": ">=0.2.0-rc.2",
     "@deepseek-ai/schemastery": "^3.18.2"
   }
 }

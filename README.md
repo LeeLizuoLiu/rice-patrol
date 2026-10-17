@@ -28,7 +28,9 @@ Each newly confirmed loop can recover; the same stop submits only one handoff. F
 
 ## Enablement and configuration
 
-The current package is `0.2.11-desktopcompat.1`, with a desktop entry for DSH `0.2.0-rc.2`. The source is available on GitHub; this update does not publish an npm package.
+The current package is `0.2.11-desktopcompat.1`. It requires DSH `0.2.0-rc.2` or newer (`0.2.1-rc.1` included) and has no upper bound, so later 0.2.x releases load without a version exemption. The source is available on GitHub; this update does not publish an npm package.
+
+DSH checks a plugin's declared requirements at load time and skips any plugin pinned to a different exact version. Rice Patrol now declares `>=0.2.0-rc.2` for `@deepseek-ai/dsh-llm` and `@deepseek-ai/dsh-compaction`, which is why it stays enabled across 0.2.x patch releases.
 
 Enable Rice Patrol and its components on the Plugins page. The plugin page explains automatic recovery; recovery status appears near the conversation input. See [config/recover.example.yml](config/recover.example.yml).
 

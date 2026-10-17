@@ -28,7 +28,9 @@ Rice Patrol 保护 DeepSeek Harness（DSH）的推理过程。模型持续重复
 
 ## 启用与配置
 
-当前版本为 `0.2.11-desktopcompat.1`，桌面入口适配 DSH `0.2.0-rc.2`。源码同步到 GitHub；本次不发布 npm 包。
+当前版本为 `0.2.11-desktopcompat.1`。要求 DSH `0.2.0-rc.2` 或更高版本（含 `0.2.1-rc.1`），不设上限，因此后续 0.2.x 版本无需再申请版本豁免即可加载。源码同步到 GitHub；本次不发布 npm 包。
+
+DSH 在加载时会检查插件声明的依赖版本，凡把版本钉死在某个具体值上的插件都会被跳过。Rice Patrol 现在为 `@deepseek-ai/dsh-llm` 和 `@deepseek-ai/dsh-compaction` 声明 `>=0.2.0-rc.2`，因此在 0.2.x 的补丁版本之间不会因升级而失效。
 
 在 Plugins 页面启用 Rice Patrol 及其组件即可。插件页面显示自动恢复说明，恢复状态显示在对话输入区附近。配置示例见 [config/recover.example.yml](config/recover.example.yml)。
 
